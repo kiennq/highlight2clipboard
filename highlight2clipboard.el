@@ -1,4 +1,4 @@
-;;; highlight2clipboard.el --- Copy text to clipboard with highlighting.
+;;; highlight2clipboard.el --- Copy text to clipboard with highlighting.  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2015 Anders Lindgren
 
@@ -28,8 +28,6 @@
 ;; syntax highlighted source code into word processors and mail
 ;; editors.
 ;;
-;; On MS-Windows, Ruby must be installed.
-;;
 ;; Usage:
 ;;
 ;; * `M-x highlight2clipboard-copy-region-to-clipboard RET' -- Copy
@@ -58,10 +56,6 @@
 ;; buffer, use `highlight2clipboard-ensure-buffer-is-fontified', or
 ;; use one of the `highlight2clipboard-copy-' functions.
 ;;
-;; This package generates some temporary files, which it does not
-;; remove. It is assumed that the system temporary directory is
-;; cleaned from time to time.
-
 ;; Implementation:
 ;;
 ;; This package use the package `htmlize' to create an HTML version of
@@ -77,56 +71,13 @@
   "Support for exporting formatted text to the clipboard."
   :group 'faces)
 
-
-(defcustom highlight2clipboard-temporary-file-directory
-  (or small-temporary-file-directory
-      temporary-file-directory)
-  "The location where this package place temporary files."
-  :group 'highlight2clipboard)
-
-
-;; Copy of the last copied text, used to prevent loss of text
-;; properties when the text is pasted back into Emacs.
-(defvar highlight2clipboard--last-text nil)
-
 (defvar highlight2clipboard--original-interprocess-cut-function
   interprogram-cut-function)
-
-(defvar highlight2clipboard--original-interprocess-paste-function
-  interprogram-paste-function)
 
 (defvar highlight2clipboard--directory
   (if load-file-name
       (file-name-directory load-file-name)
     default-directory))
-
-(defvar highlight2clipboard--temp-file-base-name
-  (expand-file-name (make-temp-name "h2c-")
-                    highlight2clipboard-temporary-file-directory))
-
-
-;; ------------------------------------------------------------
-;; Interprogram functions
-;;
-
-(setq interprogram-cut-function 'highlight2clipboard-copy-to-clipboard)
-
-;; --------------------
-
-(defun highlight2clipboard-interprogram-paste-function ()
-  (and highlight2clipboard--original-interprocess-paste-function
-       (let ((clipboard
-              (funcall
-               highlight2clipboard--original-interprocess-paste-function)))
-         (if (and highlight2clipboard--last-text
-                  (string= clipboard highlight2clipboard--last-text))
-             highlight2clipboard--last-text
-           (setq highlight2clipboard--last-text nil)
-           clipboard))))
-
-(setq interprogram-paste-function
-      'highlight2clipboard-interprogram-paste-function)
-
 
 ;; ------------------------------------------------------------
 ;; Global minor mode
@@ -139,15 +90,18 @@
   nil
   nil
   :global t
+  :lighter " clipboard"
   :group 'highlight2clipboard
   ;; This will issue an error on unsupported systems, preventing our
   ;; hooks to be installed.
   (highlight2clipboard-set-defaults)
-  (setq interprogram-cut-function
-        (if highlight2clipboard-mode
-            'highlight2clipboard-copy-to-clipboard
-          highlight2clipboard--original-interprocess-cut-function)))
+  (highlight2clipboard-init))
 
+(defun highlight2clipboard-init ()
+  (interactive)
+  (setq interprogram-cut-function
+        (if highlight2clipboard-mode 'highlight2clipboard-copy-to-clipboard
+          highlight2clipboard--original-interprocess-cut-function)))
 
 ;; ------------------------------------------------------------
 ;; Core functions.
@@ -169,15 +123,13 @@
 
 ;;;###autoload
 (defun highlight2clipboard-copy-region-to-clipboard (beg end)
-  "Copy region with formatting to system clipboard.
+  "Copy region (BEG END) with formatting to system clipboard.
 
 Unlike using Highlight2clipboard mode, this ensure that buffers
 are fully fontified."
   (interactive "r")
   (highlight2clipboard-ensure-buffer-is-fontified)
-  (highlight2clipboard-copy-to-clipboard
-   (buffer-substring beg end)))
-
+  (highlight2clipboard-copy-to-clipboard (buffer-substring beg end)))
 
 ;;;###autoload
 (defun highlight2clipboard-copy-buffer-to-clipboard ()
@@ -191,40 +143,45 @@ are fully fontified."
 
 (defun highlight2clipboard-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
-  (setq highlight2clipboard--last-text text)
-  ;; Set the normal clipboard string(s).
-  (when highlight2clipboard--original-interprocess-cut-function
-    (funcall highlight2clipboard--original-interprocess-cut-function text))
-  (highlight2clipboard-set-defaults)
-  ;; Add a html version to the clipboard.
-  (let ((file-name-html (concat highlight2clipboard--temp-file-base-name
-                                ".html")))
+  (save-excursion
     (with-temp-buffer
+      (goto-char (point-min))
       (insert text)
-      (let ((htmlize-output-type 'inline-css))
-        (let ((html-buffer (htmlize-buffer)))
-          (with-current-buffer html-buffer
-            (let ((coding-system-for-write 'utf-8))
-              (goto-char (point-min))
-              (let ((p (if (re-search-forward "<pre>" nil t)
-                           (prog1
-                               (match-beginning 0)
-                             ;; Remove extra newline.
-                             (delete-char 1))
-                         (point-min))))
-                (goto-char p)
-                (insert "<meta charset='utf-8'>")
+      (let* ((htmlize-output-type 'inline-css)
+             (html-text
+              (with-current-buffer (htmlize-buffer)
+                (goto-char (point-min))
+                ;; changing <body> tag to <div> and trim region around
+                (let ((p (if (re-search-forward "<body")
+                             (prog1
+                                 (match-beginning 0)
+                               (replace-match "<div"))
+                           (point-min))))
+                  (delete-region (point-min) p))
                 (goto-char (point-max))
-                (let ((p2 (if (re-search-backward "</pre>\n" nil t)
-                              (match-end 0)
-                            (point-max))))
-                  (write-region p p2 file-name-html nil :silent)))))
-          (kill-buffer html-buffer))))
-    (when highlight2clipboard--add-html-to-clipboard-function
-      (funcall highlight2clipboard--add-html-to-clipboard-function
-               file-name-html))))
-
-
+                (let ((p (if (re-search-backward "</body>")
+                             (prog1
+                                 (match-end 0)
+                               (replace-match "</div>"))
+                           (point-max))))
+                  (delete-region p (point-max)))
+                (goto-char (point-min))
+                (let ((p (if (re-search-forward "<pre>" nil t)
+                             (prog1
+                                 (match-beginning 0)
+                               ;; Remove extra newline.
+                               (delete-char 1))
+                           (point-min))))
+                  (goto-char p)
+                  (insert "<meta charset='utf-8'>"))
+                (let ((text (buffer-string)))
+                  (kill-buffer)
+                  text))))
+        (start-process "clipboard"
+                       "*clipboard*"
+                       (concat highlight2clipboard--directory "bin/goclipboard.exe")
+                       "--html" html-text
+                       "--text" text)))))
 ;; ------------------------------------------------------------
 ;; System-specific support.
 ;;

@@ -8,8 +8,6 @@ to the system clipboard. Concretely, this allows you to paste
 syntax highlighted source code into word processors and mail
 editors.
 
-On MS-Windows, Ruby must be installed.
-
 ## Usage
 
 * <kbd>M-x highlight2clipboard-copy-region-to-clipboard RET</kbd> -- Copy
@@ -35,10 +33,6 @@ that when copying text to the clipboard, only the highlighted parts
 gets formatting information. To get around this, walk through the
 buffer, use `highlight2clipboard-ensure-buffer-is-fontified`, or
 use one of the `highlight2clipboard-copy-` functions.
-
-This package generates some temporary files, which it does not
-remove. It is assumed that the system temporary directory is
-cleaned from time to time.
 
 ## Implementation
 
