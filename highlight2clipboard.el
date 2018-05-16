@@ -66,6 +66,7 @@
 
 
 (require 'htmlize)
+;; (require 'json)
 
 (defgroup highlight2clipboard nil
   "Support for exporting formatted text to the clipboard."
@@ -177,48 +178,50 @@ are fully fontified."
                 (let ((text (buffer-string)))
                   (kill-buffer)
                   text))))
-        (start-process "clipboard"
-                       "*clipboard*"
-                       (concat highlight2clipboard--directory "bin/goclipboard.exe")
-                       "--html" html-text
-                       "--text" text)))))
+        (when highlight2clipboard--copy-to-clipboard-function
+          (funcall highlight2clipboard--copy-to-clipboard-function
+                   text html-text))
+        ))))
 ;; ------------------------------------------------------------
 ;; System-specific support.
 ;;
 
-(defvar highlight2clipboard--add-html-to-clipboard-function nil)
+(defvar highlight2clipboard--copy-to-clipboard-function nil)
 
 (defun highlight2clipboard-set-defaults ()
   "Set up highlight2clipboard, or issue an error if system not supported."
-  (unless highlight2clipboard--add-html-to-clipboard-function
-    (setq highlight2clipboard--add-html-to-clipboard-function
+  (unless highlight2clipboard--copy-to-clipboard-function
+    (setq highlight2clipboard--copy-to-clipboard-function
           (cond ((eq system-type 'darwin)
-                 #'highlight2clipboard--add-html-to-clipboard-osx)
+                 #'highlight2clipboard--copy-to-clipboard-osx)
                 ((memq system-type '(windows-nt cygwin))
-                 #'highlight2clipboard--add-html-to-clipboard-w32)
+                 #'highlight2clipboard--copy-to-clipboard-w32)
                 (t (error "Unsupported system: %s" system-type))))))
 
 
-(defun highlight2clipboard--add-html-to-clipboard-osx (file-name)
-  (call-process
-   "python"
-   nil
-   0                                  ; <- Discard and don't wait
-   nil
-   (concat highlight2clipboard--directory
-           "bin/highlight2clipboard-osx.py")
-   file-name))
+(defun highlight2clipboard--copy-to-clipboard-osx (text html-text)
+  ;; (call-process
+  ;;  "python"
+  ;;  nil
+  ;;  0                                  ; <- Discard and don't wait
+  ;;  nil
+  ;;  (concat highlight2clipboard--directory
+  ;;          "bin/highlight2clipboard-osx.py")
+  ;;  file-name)
+  )
 
 
-(defun highlight2clipboard--add-html-to-clipboard-w32 (file-name)
-  (call-process
-   "ruby"
-   nil
-   0                                  ; <- Discard and don't wait
-   nil
-   (concat highlight2clipboard--directory
-           "bin/highlight2clipboard-w32.rb")
-   file-name))
+(defun highlight2clipboard--copy-to-clipboard-w32 (text html-text)
+  "TEXT HTML-TEXT."
+  (funcall highlight2clipboard--original-interprocess-cut-function text)
+  (let ((clipboard (start-process "clipboard"
+                                    "*clipboard*"
+                                    (concat highlight2clipboard--directory "bin/goclipboard.exe")
+                                    "--in-html" "--clear=0"))
+          ;; (data (json-encode `((text . ,text) (htmlText . ,html-text))))
+          )
+    (process-send-string clipboard html-text)
+    (process-send-eof clipboard)))
 
 (provide 'highlight2clipboard)
 
