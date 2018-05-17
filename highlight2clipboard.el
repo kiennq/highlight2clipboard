@@ -75,10 +75,12 @@
 (defvar highlight2clipboard--original-interprocess-cut-function
   interprogram-cut-function)
 
-(defvar highlight2clipboard--directory
+(defconst highlight2clipboard--directory
   (if load-file-name
       (file-name-directory load-file-name)
     default-directory))
+
+(defconst html-format "HTML Format" "HTML format string.")
 
 ;; ------------------------------------------------------------
 ;; Global minor mode
@@ -144,62 +146,62 @@ are fully fontified."
 
 (defun highlight2clipboard-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
+  ;; Set the normal clipboard string(s).
+  (funcall highlight2clipboard--original-interprocess-cut-function text)
+  ;; Add addition flavor(s)
   (save-excursion
     (with-temp-buffer
       (goto-char (point-min))
       (insert text)
       (let* ((htmlize-output-type 'inline-css)
-             (html-text
-              (with-current-buffer (htmlize-buffer)
-                (goto-char (point-min))
-                ;; changing <body> tag to <div> and trim region around
-                (let ((p (if (re-search-forward "<body")
-                             (prog1
-                                 (match-beginning 0)
-                               (replace-match "<div"))
-                           (point-min))))
-                  (delete-region (point-min) p))
-                (goto-char (point-max))
-                (let ((p (if (re-search-backward "</body>")
-                             (prog1
-                                 (match-end 0)
-                               (replace-match "</div>"))
-                           (point-max))))
-                  (delete-region p (point-max)))
-                (goto-char (point-min))
-                (let ((p (if (re-search-forward "<pre>" nil t)
-                             (prog1
-                                 (match-beginning 0)
-                               ;; Remove extra newline.
-                               (delete-char 1))
-                           (point-min))))
-                  (goto-char p)
-                  (insert "<meta charset='utf-8'>"))
-                (let ((text (buffer-string)))
-                  (kill-buffer)
-                  text))))
-        (when highlight2clipboard--copy-to-clipboard-function
-          (funcall highlight2clipboard--copy-to-clipboard-function
-                   text html-text))
-        ))))
+             (html-text (with-current-buffer (htmlize-buffer)
+                          (goto-char (point-min))
+                          ;; changing <body> tag to <div> and trim region around
+                          (let ((p (if (re-search-forward "<body")
+                                       (prog1
+                                           (match-beginning 0)
+                                         (replace-match "<div"))
+                                     (point-min))))
+                            (delete-region (point-min) p))
+                          (goto-char (point-max))
+                          (let ((p (if (re-search-backward "</body>")
+                                       (prog1
+                                           (match-end 0)
+                                         (replace-match "</div>"))
+                                     (point-max))))
+                            (delete-region p (point-max)))
+                          (goto-char (point-min))
+                          (let ((p (if (re-search-forward "<pre>" nil t)
+                                       (prog1
+                                           (match-beginning 0)
+                                         ;; Remove extra newline.
+                                         (delete-char 1))
+                                     (point-min))))
+                            (goto-char p)
+                            (insert "<meta charset='utf-8'>"))
+                          (let ((text (buffer-string))) (kill-buffer) text))))
+        (when highlight2clipboard--add-data-to-clipboard-function
+          (funcall highlight2clipboard--add-data-to-clipboard-function
+                   'html-format html-text)))
+      )))
 ;; ------------------------------------------------------------
 ;; System-specific support.
 ;;
 
-(defvar highlight2clipboard--copy-to-clipboard-function nil)
+(defvar highlight2clipboard--add-data-to-clipboard-function nil)
 
 (defun highlight2clipboard-set-defaults ()
   "Set up highlight2clipboard, or issue an error if system not supported."
-  (unless highlight2clipboard--copy-to-clipboard-function
-    (setq highlight2clipboard--copy-to-clipboard-function
+  (unless highlight2clipboard--add-data-to-clipboard-function
+    (setq highlight2clipboard--add-data-to-clipboard-function
           (cond ((eq system-type 'darwin)
-                 #'highlight2clipboard--copy-to-clipboard-osx)
+                 #'highlight2clipboard--add-data-to-clipboard-osx)
                 ((memq system-type '(windows-nt cygwin))
-                 #'highlight2clipboard--copy-to-clipboard-w32)
+                 #'highlight2clipboard--add-data-to-clipboard-w32)
                 (t (error "Unsupported system: %s" system-type))))))
 
 
-(defun highlight2clipboard--copy-to-clipboard-osx (text html-text)
+(defun highlight2clipboard--add-data-to-clipboard-osx (format text)
   ;; (call-process
   ;;  "python"
   ;;  nil
@@ -211,16 +213,14 @@ are fully fontified."
   )
 
 
-(defun highlight2clipboard--copy-to-clipboard-w32 (text html-text)
-  "TEXT HTML-TEXT."
-  (funcall highlight2clipboard--original-interprocess-cut-function text)
+(defun highlight2clipboard--add-data-to-clipboard-w32 (format text)
+  "FORMAT TEXT."
   (let ((clipboard (start-process "clipboard"
-                                    "*clipboard*"
-                                    (concat highlight2clipboard--directory "bin/goclipboard.exe")
-                                    "--in-html" "--clear=0"))
-          ;; (data (json-encode `((text . ,text) (htmlText . ,html-text))))
-          )
-    (process-send-string clipboard html-text)
+                                  nil
+                                  (concat highlight2clipboard--directory "bin/goclip.exe")
+                                  "copy" "--no-clear"))
+          (data (json-encode `(((cf . ,(eval format)) (data . ,text))))))
+    (process-send-string clipboard data)
     (process-send-eof clipboard)))
 
 (provide 'highlight2clipboard)
