@@ -66,7 +66,7 @@
 
 
 (require 'htmlize)
-;; (require 'json)
+(require 'json)
 
 (defgroup highlight2clipboard nil
   "Support for exporting formatted text to the clipboard."
