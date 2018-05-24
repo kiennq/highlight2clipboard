@@ -146,44 +146,45 @@ are fully fontified."
 
 (defun highlight2clipboard-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
-  ;; Set the normal clipboard string(s).
-  (funcall highlight2clipboard--original-interprocess-cut-function text)
-  ;; Add addition flavor(s)
-  (save-excursion
-    (with-temp-buffer
-      (goto-char (point-min))
-      (insert text)
-      (let* ((htmlize-output-type 'inline-css)
-             (html-text (with-current-buffer (htmlize-buffer)
-                          (goto-char (point-min))
-                          ;; changing <body> tag to <div> and trim region around
-                          (let ((p (if (re-search-forward "<body")
-                                       (prog1
-                                           (match-beginning 0)
-                                         (replace-match "<div"))
-                                     (point-min))))
-                            (delete-region (point-min) p))
-                          (goto-char (point-max))
-                          (let ((p (if (re-search-backward "</body>")
-                                       (prog1
-                                           (match-end 0)
-                                         (replace-match "</div>"))
-                                     (point-max))))
-                            (delete-region p (point-max)))
-                          (goto-char (point-min))
-                          (let ((p (if (re-search-forward "<pre>" nil t)
-                                       (prog1
-                                           (match-beginning 0)
-                                         ;; Remove extra newline.
-                                         (delete-char 1))
-                                     (point-min))))
-                            (goto-char p)
-                            (insert "<meta charset='utf-8'>"))
-                          (let ((text (buffer-string))) (kill-buffer) text))))
-        (when highlight2clipboard--add-data-to-clipboard-function
-          (funcall highlight2clipboard--add-data-to-clipboard-function
-                   'html-format html-text)))
-      )))
+  (prog1
+      ;; Set the normal clipboard string(s).
+      (funcall highlight2clipboard--original-interprocess-cut-function text)
+    ;; Add addition flavor(s)
+    (save-excursion
+      (with-temp-buffer
+        (goto-char (point-min))
+        (insert text)
+        (let* ((htmlize-output-type 'inline-css)
+               (html-text (with-current-buffer (htmlize-buffer)
+                            (goto-char (point-min))
+                            ;; changing <body> tag to <div> and trim region around
+                            (let ((p (if (re-search-forward "<body")
+                                         (prog1
+                                             (match-beginning 0)
+                                           (replace-match "<div"))
+                                       (point-min))))
+                              (delete-region (point-min) p))
+                            (goto-char (point-max))
+                            (let ((p (if (re-search-backward "</body>")
+                                         (prog1
+                                             (match-end 0)
+                                           (replace-match "</div>"))
+                                       (point-max))))
+                              (delete-region p (point-max)))
+                            (goto-char (point-min))
+                            (let ((p (if (re-search-forward "<pre>" nil t)
+                                         (prog1
+                                             (match-beginning 0)
+                                           ;; Remove extra newline.
+                                           (delete-char 1))
+                                       (point-min))))
+                              (goto-char p)
+                              (insert "<meta charset='utf-8'>"))
+                            (let ((text (buffer-string))) (kill-buffer) text))))
+          (when highlight2clipboard--add-data-to-clipboard-function
+            (funcall highlight2clipboard--add-data-to-clipboard-function
+                     'html-format html-text)))
+        ))))
 ;; ------------------------------------------------------------
 ;; System-specific support.
 ;;
