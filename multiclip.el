@@ -1,4 +1,4 @@
-;;; highlight2clipboard.el --- Copy text to clipboard with highlighting.  -*- lexical-binding: t; -*-
+;;; multiclip.el --- Copy text to clipboard with highlighting.  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2015 Anders Lindgren
 
@@ -30,13 +30,13 @@
 ;;
 ;; Usage:
 ;;
-;; * `M-x highlight2clipboard-copy-region-to-clipboard RET' -- Copy
+;; * `M-x multiclip-copy-region-to-clipboard RET' -- Copy
 ;;   the region, with formatting, to the clipboard.
 ;;
-;; * `M-x highlight2clipboard-copy-buffer-to-clipboard RET' -- Copy
+;; * `M-x multiclip-copy-buffer-to-clipboard RET' -- Copy
 ;;   the buffer, with formatting, to the clipboard.
 ;;
-;; * Highlight2clipboard mode -- Global minor mode, when enabled, all
+;; * multiclip mode -- Global minor mode, when enabled, all
 ;;   copies and cuts are exported, with formatting information, to the
 ;;   clipboard.
 ;;
@@ -53,8 +53,8 @@
 ;; visible parts of a buffer are highlighted. The problem with this is
 ;; that when copying text to the clipboard, only the highlighted parts
 ;; gets formatting information. To get around this, walk through the
-;; buffer, use `highlight2clipboard-ensure-buffer-is-fontified', or
-;; use one of the `highlight2clipboard-copy-' functions.
+;; buffer, use `multiclip-ensure-buffer-is-fontified', or
+;; use one of the `multiclip-copy-' functions.
 ;;
 ;; Implementation:
 ;;
@@ -68,50 +68,58 @@
 (require 'htmlize)
 (require 'json)
 
-(defgroup highlight2clipboard nil
+(defgroup multiclip nil
   "Support for exporting formatted text to the clipboard."
   :group 'faces)
 
-(defvar highlight2clipboard--original-interprocess-cut-function
+(defvar multiclip--original-interprocess-cut-function
   interprogram-cut-function)
 
-(defconst highlight2clipboard--directory
+(defvar multiclip--original-interprocess-paste-function
+  interprogram-paste-function)
+
+(defconst multiclip--directory
   (if load-file-name
       (file-name-directory load-file-name)
     default-directory))
 
-(defconst html-format "HTML Format" "HTML format string.")
+(defconst html-format "html" "HTML format string.")
+(defconst text-format "text" "Text format.")
 
 ;; ------------------------------------------------------------
 ;; Global minor mode
 ;;
 
 ;;;###autoload
-(define-minor-mode highlight2clipboard-mode
+(define-minor-mode multiclip-mode
   "When active, cuts and copies are exported with formatting to the clipboard."
   nil
   nil
   nil
   :global t
   :lighter " clipboard"
-  :group 'highlight2clipboard
+  :group 'multiclip
   ;; This will issue an error on unsupported systems, preventing our
   ;; hooks to be installed.
-  (highlight2clipboard-set-defaults)
-  (highlight2clipboard-init))
+  (multiclip-set-defaults)
+  (multiclip-init))
 
-(defun highlight2clipboard-init ()
+(defun multiclip-init ()
   (interactive)
   (setq interprogram-cut-function
-        (if highlight2clipboard-mode 'highlight2clipboard-copy-to-clipboard
-          highlight2clipboard--original-interprocess-cut-function)))
+        (if multiclip-mode 'multiclip-copy-to-clipboard
+          multiclip--original-interprocess-cut-function))
+  (setq interprogram-paste-function
+        (if multiclip-mode 'multiclip-paste-from-clipboard
+          multiclip--original-interprocess-paste-function))
+  )
 
 ;; ------------------------------------------------------------
 ;; Core functions.
 ;;
 
 ;;;###autoload
-(defun highlight2clipboard-ensure-buffer-is-fontified ()
+(defun multiclip-ensure-buffer-is-fontified ()
   "Ensure that the buffer is fontified."
   (interactive)
   (when (and font-lock-mode
@@ -125,30 +133,32 @@
 
 
 ;;;###autoload
-(defun highlight2clipboard-copy-region-to-clipboard (beg end)
+(defun multiclip-copy-region-to-clipboard (beg end)
   "Copy region (BEG END) with formatting to system clipboard.
 
-Unlike using Highlight2clipboard mode, this ensure that buffers
+Unlike using multiclip mode, this ensure that buffers
 are fully fontified."
   (interactive "r")
-  (highlight2clipboard-ensure-buffer-is-fontified)
-  (highlight2clipboard-copy-to-clipboard (buffer-substring beg end)))
+  (multiclip-ensure-buffer-is-fontified)
+  (multiclip-copy-to-clipboard (buffer-substring beg end)))
 
 ;;;###autoload
-(defun highlight2clipboard-copy-buffer-to-clipboard ()
+(defun multiclip-copy-buffer-to-clipboard ()
   "Copy buffer with formatting to system clipboard.
 
-Unlike using Highlight2clipboard mode, this ensure that buffers
+Unlike using multiclip mode, this ensure that buffers
 are fully fontified."
   (interactive)
-  (highlight2clipboard-copy-region-to-clipboard (point-min) (point-max)))
+  (multiclip-copy-region-to-clipboard (point-min) (point-max)))
 
+(defvar multiclip--last-copy nil)
 
-(defun highlight2clipboard-copy-to-clipboard (text)
+(defun multiclip-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
   (prog1
       ;; Set the normal clipboard string(s).
-      (funcall highlight2clipboard--original-interprocess-cut-function text)
+      ;; (funcall multiclip--original-interprocess-cut-function text)
+      (setq multiclip--last-copy text)
     ;; Add addition flavor(s)
     (save-excursion
       (with-temp-buffer
@@ -181,49 +191,66 @@ are fully fontified."
                               (goto-char p)
                               (insert "<meta charset='utf-8'>"))
                             (let ((text (buffer-string))) (kill-buffer) text))))
-          (when highlight2clipboard--add-data-to-clipboard-function
-            (funcall highlight2clipboard--add-data-to-clipboard-function
-                     'html-format html-text)))
+          (when multiclip--set-data-to-clipboard-function
+            (funcall multiclip--set-data-to-clipboard-function
+                     `((text-format . ,text) (html-format . ,html-text)))))
         ))))
+
+(defun multiclip-paste-from-clipboard ()
+  "Paste from system clipboard"
+  (funcall multiclip--get-data-from-clipboard-function))
 ;; ------------------------------------------------------------
 ;; System-specific support.
 ;;
 
-(defvar highlight2clipboard--add-data-to-clipboard-function nil)
+(defvar multiclip--set-data-to-clipboard-function nil)
+(defvar multiclip--get-data-from-clipboard-function nil)
 
-(defun highlight2clipboard-set-defaults ()
-  "Set up highlight2clipboard, or issue an error if system not supported."
-  (unless highlight2clipboard--add-data-to-clipboard-function
-    (setq highlight2clipboard--add-data-to-clipboard-function
-          (cond ((eq system-type 'darwin)
-                 #'highlight2clipboard--add-data-to-clipboard-osx)
-                ((memq system-type '(windows-nt cygwin))
-                 #'highlight2clipboard--add-data-to-clipboard-w32)
-                (t (error "Unsupported system: %s" system-type))))))
+(defun multiclip-set-defaults ()
+  "Set up multiclip, or issue an error if system not supported."
+  (cond ((eq system-type 'darwin)
+         (setq multiclip--set-data-to-clipboard-function
+               #'multiclip--set-data-to-clipboard-osx)
+         (setq multiclip--get-data-from-clipboard-function
+                 #'multiclip--get-data-from-clipboard-osx))
+        ((memq system-type '(windows-nt cygwin))
+         (setq multiclip--set-data-to-clipboard-function
+               #'multiclip--set-data-to-clipboard-w32)
+         (setq multiclip--get-data-from-clipboard-function
+                 #'multiclip--get-data-from-clipboard-w32))
+        (t (error "Unsupported system: %s" system-type))))
 
 
-(defun highlight2clipboard--add-data-to-clipboard-osx (format text)
+(defun multiclip--set-data-to-clipboard-osx (data)
   ;; (call-process
   ;;  "python"
   ;;  nil
   ;;  0                                  ; <- Discard and don't wait
   ;;  nil
-  ;;  (concat highlight2clipboard--directory
-  ;;          "bin/highlight2clipboard-osx.py")
+  ;;  (concat multiclip--directory
+  ;;          "bin/multiclip-osx.py")
   ;;  file-name)
   )
 
+(defun multiclip--get-data-from-clipboard-osx ()
+  )
 
-(defun highlight2clipboard--add-data-to-clipboard-w32 (format text)
-  "FORMAT TEXT."
+(defun multiclip--set-data-to-clipboard-w32 (data)
+  "DATA is a list of (format . text)."
   (let ((clipboard (start-process "clipboard"
                                   nil
-                                  (concat highlight2clipboard--directory "bin/goclip.exe")
-                                  "copy" "--no-clear"))
-          (data (json-encode `(((cf . ,(eval format)) (data . ,text))))))
+                                  (concat multiclip--directory "bin/csclip.exe")
+                                  "copy"))
+          (data (json-encode (mapcar (lambda (x) `((cf . ,(eval (car x))) (data . ,(cdr x)))) data))))
     (process-send-string clipboard data)
     (process-send-eof clipboard)))
 
-(provide 'highlight2clipboard)
+(defun multiclip--get-data-from-clipboard-w32 ()
+  "."
+  (let ((text (shell-command-to-string (concat multiclip--directory "bin/csclip.exe paste"))))
+    (unless (string= text multiclip--last-copy) text)))
 
-;;; highlight2clipboard.el ends here
+
+(provide 'multiclip)
+
+;;; multiclip.el ends here
