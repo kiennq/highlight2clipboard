@@ -5,7 +5,7 @@
 ;; Author: Anders Lindgren
 ;; Version: 0.0.2
 ;; Created: 2015-06-17
-;; Package-Requires: ((htmlize "1.47"))
+;; Package-Requires: ((htmlize "1.47") (deferred "0.4.0"))
 ;; Keywords: tools
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -67,6 +67,7 @@
 
 (require 'htmlize)
 (require 'json)
+(require 'deferred)
 
 (defgroup multiclip nil
   "Support for exporting formatted text to the clipboard."
@@ -78,13 +79,21 @@
 (defvar multiclip--original-interprocess-paste-function
   interprogram-paste-function)
 
+(defvar multiclip--content-len 0 "Content length of a message.")
+
+(defvar multiclip-debug nil "Enable debug mode.")
+
 (defconst multiclip--directory
   (if load-file-name
       (file-name-directory load-file-name)
     default-directory))
 
-(defconst html-format "html" "HTML format string.")
-(defconst text-format "text" "Text format.")
+(defconst multiclip--format-html "html" "HTML format string.")
+(defconst multiclip--format-text "text" "Text format.")
+
+(defconst multiclip--command-paste "paste")
+(defconst multiclip--command-copy "copy")
+(defconst multiclip--command-get "get")
 
 ;; ------------------------------------------------------------
 ;; Global minor mode
@@ -102,21 +111,117 @@
   ;; This will issue an error on unsupported systems, preventing our
   ;; hooks to be installed.
   (multiclip-set-defaults)
-  (multiclip-init))
+  (if multiclip-mode (multiclip-init) (multiclip-exit)))
+
+(defvar multiclip--proc nil "Server clipboard notifier process.")
 
 (defun multiclip-init ()
+  "Init multiclip."
   (interactive)
-  (setq interprogram-cut-function
-        (if multiclip-mode 'multiclip-copy-to-clipboard
-          multiclip--original-interprocess-cut-function))
-  (setq interprogram-paste-function
-        (if multiclip-mode 'multiclip-paste-from-clipboard
-          multiclip--original-interprocess-paste-function))
+  (setq interprogram-cut-function 'multiclip-copy-to-clipboard)
+  (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
+  (setq multiclip--proc (start-process "clipboard" "*clipboard*"
+                                       (concat multiclip--directory "bin/csclip.exe")
+                                       "server" "-e"))
+  (multiclip--multiclip--command-dispatch)
   )
+
+(defun multiclip-exit ()
+  "Kill clipboard process and clean up."
+  (interactive)
+  (setq interprogram-cut-function multiclip--original-interprocess-cut-function)
+  (setq interprogram-paste-function multiclip--original-interprocess-paste-function)
+  (if multiclip--proc
+      (ignore-errors (set-process-query-on-exit-flag multiclip--proc nil)
+                     (kill-process multiclip--proc)
+                     (kill-buffer (process-buffer multiclip--proc))
+                     (setq multiclip--proc nil))))
 
 ;; ------------------------------------------------------------
 ;; Core functions.
 ;;
+
+(defsubst multiclip--debug (msg &optional erase? popup?)
+  (if multiclip-debug
+      (with-current-buffer (get-buffer-create "*multiclip debug*")
+        (if erase? (erase-buffer))
+        (insert (format "%s\n" msg))
+        (if popup? (pop-to-buffer (current-buffer))))))
+
+(defmacro multiclip--deferrize (orig-func &rest args)
+  "Change ORIG-FUNC (&rest ARGS CALLBACK) to deferred form."
+  (let* ((d (deferred:new #'identity))
+         (args (nconc args `((lambda (res)
+                               (deferred:callback-post ,d res))))))
+    `(progn
+       (funcall ,orig-func ,@args)
+       ,d)))
+
+(defun multiclip--set-process-filter (callback)
+  "Apply CALLBACK to stiched output."
+  (set-process-filter multiclip--proc
+                      (lambda (proc output)
+                        (multiclip--debug output)
+                        (let ((set-content-len
+                               (lambda (buffer)
+                                 (unless (= (buffer-size buffer) 0)
+                                   (setq multiclip--content-len 0)
+                                   (with-current-buffer buffer
+                                     (goto-char (point-min))
+                                     (setq multiclip--content-len (string-to-number (thing-at-point 'line t)))
+                                     (multiclip--debug (format "Read-len: %d" multiclip--content-len))
+                                     (multiclip--debug (format "Read-buffer: %s" (buffer-string)))
+                                     (if (= 0 multiclip--content-len)
+                                         (erase-buffer)
+                                       ;; skip content-length line and an empty line after that
+                                       (forward-line 1)
+                                       (delete-region (point-min) (point))))))))
+                          (with-current-buffer (get-buffer-create "*multiclip temp*")
+                            (cond
+                             ;; at the begining of temp buffer
+                             ((>= 1 (point))
+                              (goto-char (point-max))
+                              (insert output)
+                              (funcall set-content-len (current-buffer)))
+                             (t
+                              (goto-char (point-max))
+                              (insert output)))
+                            ;; all the data has been written
+                            (while (and (> multiclip--content-len 0) (> (point-max) multiclip--content-len))
+                              (unwind-protect
+                                  (let ((json-array-type 'list)
+                                        (json-object-type 'plist))
+                                    (multiclip--debug (format "Content-length: %d" multiclip--content-len))
+                                    (multiclip--debug (format "Buffer: %s"
+                                                              (buffer-substring 1 (1+ multiclip--content-len))))
+                                    (funcall callback (json-read-from-string
+                                                       (base64-decode-string
+                                                        ;; (point-min) == 1
+                                                        (buffer-substring 1 (1+ multiclip--content-len))))))
+                                (delete-region 1 (1+ multiclip--content-len))
+                                (goto-char (point-min))
+                                (funcall set-content-len (current-buffer))
+                                )))
+                          )))
+  )
+
+(defvar multiclip--last-copy nil "Last copied text.")
+(defvar multiclip--external-copy nil "External clipboard text, pushed to Emacs.")
+
+(defun multiclip--multiclip--command-dispatch ()
+  "Process notify from clipboard server proc."
+  (deferred:$
+    (multiclip--deferrize #'multiclip--set-process-filter)
+    (deferred:nextc it
+      #'(lambda (notify)
+          (cond ((string= (plist-get notify :command) multiclip--command-paste)
+                 (multiclip--debug (format "%s: %s" "args" (plist-get notify :args)))
+                 (setq multiclip--external-copy
+                       (replace-regexp-in-string
+                        "" ""
+                        (decode-coding-string (plist-get notify :args) 'utf-8)))))
+          )))
+  )
 
 ;;;###autoload
 (defun multiclip-ensure-buffer-is-fontified ()
@@ -151,14 +256,13 @@ are fully fontified."
   (interactive)
   (multiclip-copy-region-to-clipboard (point-min) (point-max)))
 
-(defvar multiclip--last-copy nil)
-
 (defun multiclip-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
   (prog1
       ;; Set the normal clipboard string(s).
       ;; (funcall multiclip--original-interprocess-cut-function text)
       (setq multiclip--last-copy text)
+      (setq multiclip--external-copy text)
     ;; Add addition flavor(s)
     (save-excursion
       (with-temp-buffer
@@ -193,11 +297,11 @@ are fully fontified."
                             (let ((text (buffer-string))) (kill-buffer) text))))
           (when multiclip--set-data-to-clipboard-function
             (funcall multiclip--set-data-to-clipboard-function
-                     `((text-format . ,text) (html-format . ,html-text)))))
+                     `((,multiclip--format-text . ,text) (,multiclip--format-html . ,html-text)))))
         ))))
 
 (defun multiclip-paste-from-clipboard ()
-  "Paste from system clipboard"
+  "Paste from system clipboard."
   (funcall multiclip--get-data-from-clipboard-function))
 ;; ------------------------------------------------------------
 ;; System-specific support.
@@ -237,19 +341,20 @@ are fully fontified."
 
 (defun multiclip--set-data-to-clipboard-w32 (data)
   "DATA is a list of (format . text)."
-  (let ((clipboard (start-process "clipboard"
-                                  nil
-                                  (concat multiclip--directory "bin/csclip.exe")
-                                  "copy"))
-          (data (json-encode (mapcar (lambda (x) `((cf . ,(eval (car x))) (data . ,(cdr x)))) data))))
-    (process-send-string clipboard data)
-    (process-send-eof clipboard)))
+  (let* ((text (json-encode
+                `((command . ,multiclip--command-copy)
+                  (data . ,(mapcar (lambda (x) `((cf . ,(car x)) (data . ,(cdr x)))) data)))))
+         (data (base64-encode-string (encode-coding-string text 'utf-8 t) 'no-line-break))
+         (size (length data)))
+    (process-send-string multiclip--proc
+                         (format "%d\r\n%s" size data)))
+
+  )
 
 (defun multiclip--get-data-from-clipboard-w32 ()
   "."
-  (let ((text (shell-command-to-string (concat multiclip--directory "bin/csclip.exe paste"))))
-    (unless (string= text multiclip--last-copy) text)))
-
+  (unless (string= multiclip--external-copy multiclip--last-copy)
+    multiclip--external-copy))
 
 (provide 'multiclip)
 
