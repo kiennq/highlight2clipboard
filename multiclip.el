@@ -24,9 +24,11 @@
 ;;; Commentary:
 
 ;; Support for copying text with formatting information, like color,
-;; to the system clipboard. Concretely, this allows you to paste
+;; to the system clipboard.  Concretely, this allows you to paste
 ;; syntax highlighted source code into word processors and mail
 ;; editors.
+;; Also, this package acts as clipboard provider, completely short-circut
+;; `Emacs'' system clipboard call.
 ;;
 ;; Usage:
 ;;
@@ -43,24 +45,27 @@
 ;; Supported systems:
 ;;
 ;; Copying formatted text to the clipboard is highly system specific.
-;; Currently, Mac OS X and MS-Windows are supported. Contributions for
+;; Currently, MS-Windows are supported.  Contributions for
 ;; other systems are most welcome.
 ;;
 ;; Known problems:
 ;;
 ;; Font Lock mode, the system providing syntax highlighting in Emacs,
-;; use "lazy highlighting". Effectively, this mean that only the
-;; visible parts of a buffer are highlighted. The problem with this is
+;; use "lazy highlighting".  Effectively, this mean that only the
+;; visible parts of a buffer are highlighted.  The problem with this is
 ;; that when copying text to the clipboard, only the highlighted parts
-;; gets formatting information. To get around this, walk through the
+;; gets formatting information.  To get around this, walk through the
 ;; buffer, use `multiclip-ensure-buffer-is-fontified', or
 ;; use one of the `multiclip-copy-' functions.
 ;;
 ;; Implementation:
 ;;
 ;; This package use the package `htmlize' to create an HTML version of
-;; a highlighted text. This is added as a new flavor to the clipboard,
+;; a highlighted text.  This is added as a new flavor to the clipboard,
 ;; allowing an application to pick the most suited version.
+;; Additional to that, clipboard's changes are now monitored and will be
+;; reflect to `Emacs' before hand, clipboard delay rendering also supported.
+;; Copy & Paste and be pleasingly fast.
 
 ;;; Code:
 
@@ -88,12 +93,21 @@
       (file-name-directory load-file-name)
     default-directory))
 
+;; Supported command format
+;; Sent:
+;; - copy:  <size>\r\n{command: copy, data: [{cf:, data:}+]}
+;; - put:   <size>\r\n{command: put, data: [{cf:, data:}]}
+;; - paste: <size>\r\n{command: put}
+;; Receive:
+;; - paste: <size>\r\n{command:<paste|get>, args:}
+
 (defconst multiclip--format-html "html" "HTML format string.")
 (defconst multiclip--format-text "text" "Text format.")
 
 (defconst multiclip--command-paste "paste")
 (defconst multiclip--command-copy "copy")
 (defconst multiclip--command-get "get")
+(defconst multiclip--command-put "put")
 
 ;; ------------------------------------------------------------
 ;; Global minor mode
@@ -194,6 +208,9 @@
                                     (multiclip--debug (format "Content-length: %d" multiclip--content-len))
                                     (multiclip--debug (format "Buffer: %s"
                                                               (buffer-substring 1 (1+ multiclip--content-len))))
+                                    (multiclip--debug (format "Decoded: %s"
+                                                              (base64-decode-string
+                                                               (buffer-substring 1 (1+ multiclip--content-len)))))
                                     (funcall callback (json-read-from-string
                                                        (base64-decode-string
                                                         ;; (point-min) == 1
@@ -219,7 +236,13 @@
                  (setq multiclip--external-copy
                        (replace-regexp-in-string
                         "" ""
-                        (decode-coding-string (plist-get notify :args) 'utf-8)))))
+                        (decode-coding-string (plist-get notify :args) 'utf-8))))
+                ((string= (plist-get notify :command) multiclip--command-get)
+                 (when multiclip--set-data-to-clipboard-function
+                   (funcall multiclip--set-data-to-clipboard-function
+                            `((,multiclip--format-html . ,(multiclip--htmlize multiclip--last-copy)))
+                            multiclip--command-put))
+                 ))
           )))
   )
 
@@ -256,6 +279,40 @@ are fully fontified."
   (interactive)
   (multiclip-copy-region-to-clipboard (point-min) (point-max)))
 
+(defun multiclip--htmlize (text)
+  "Htmlize TEXT."
+  (save-excursion
+      (with-temp-buffer
+        (goto-char (point-min))
+        (insert text)
+        (let* ((htmlize-output-type 'inline-css))
+          (with-current-buffer (htmlize-buffer)
+            (goto-char (point-min))
+            ;; changing <body> tag to <div> and trim region around
+            (let ((p (if (re-search-forward "<body")
+                         (prog1
+                             (match-beginning 0)
+                           (replace-match "<div"))
+                       (point-min))))
+              (delete-region (point-min) p))
+            (goto-char (point-max))
+            (let ((p (if (re-search-backward "</body>")
+                         (prog1
+                             (match-end 0)
+                           (replace-match "</div>"))
+                       (point-max))))
+              (delete-region p (point-max)))
+            (goto-char (point-min))
+            (let ((p (if (re-search-forward "<pre>" nil t)
+                         (prog1
+                             (match-beginning 0)
+                           ;; Remove extra newline.
+                           (delete-char 1))
+                       (point-min))))
+              (goto-char p)
+              (insert "<meta charset='utf-8'>"))
+            (let ((text (buffer-string))) (kill-buffer) text))))))
+
 (defun multiclip-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
   (prog1
@@ -264,41 +321,11 @@ are fully fontified."
       (setq multiclip--last-copy text)
       (setq multiclip--external-copy text)
     ;; Add addition flavor(s)
-    (save-excursion
-      (with-temp-buffer
-        (goto-char (point-min))
-        (insert text)
-        (let* ((htmlize-output-type 'inline-css)
-               (html-text (with-current-buffer (htmlize-buffer)
-                            (goto-char (point-min))
-                            ;; changing <body> tag to <div> and trim region around
-                            (let ((p (if (re-search-forward "<body")
-                                         (prog1
-                                             (match-beginning 0)
-                                           (replace-match "<div"))
-                                       (point-min))))
-                              (delete-region (point-min) p))
-                            (goto-char (point-max))
-                            (let ((p (if (re-search-backward "</body>")
-                                         (prog1
-                                             (match-end 0)
-                                           (replace-match "</div>"))
-                                       (point-max))))
-                              (delete-region p (point-max)))
-                            (goto-char (point-min))
-                            (let ((p (if (re-search-forward "<pre>" nil t)
-                                         (prog1
-                                             (match-beginning 0)
-                                           ;; Remove extra newline.
-                                           (delete-char 1))
-                                       (point-min))))
-                              (goto-char p)
-                              (insert "<meta charset='utf-8'>"))
-                            (let ((text (buffer-string))) (kill-buffer) text))))
-          (when multiclip--set-data-to-clipboard-function
-            (funcall multiclip--set-data-to-clipboard-function
-                     `((,multiclip--format-text . ,text) (,multiclip--format-html . ,html-text)))))
-        ))))
+      (when multiclip--set-data-to-clipboard-function
+        (funcall multiclip--set-data-to-clipboard-function
+                 `((,multiclip--format-text . ,text)
+                   (,multiclip--format-html))))
+))
 
 (defun multiclip-paste-from-clipboard ()
   "Paste from system clipboard."
@@ -339,16 +366,17 @@ are fully fontified."
 (defun multiclip--get-data-from-clipboard-osx ()
   )
 
-(defun multiclip--set-data-to-clipboard-w32 (data)
-  "DATA is a list of (format . text)."
+(defun multiclip--set-data-to-clipboard-w32 (data &optional command)
+  "DATA is a list of (format . text).  COMMAND has default value as copy."
   (let* ((text (json-encode
-                `((command . ,multiclip--command-copy)
+                `((command . ,(or command multiclip--command-copy))
                   (data . ,(mapcar (lambda (x) `((cf . ,(car x)) (data . ,(cdr x)))) data)))))
          (data (base64-encode-string (encode-coding-string text 'utf-8 t) 'no-line-break))
          (size (length data)))
     (process-send-string multiclip--proc
-                         (format "%d\r\n%s" size data)))
-
+                         (format "%d\r\n%s" size data))
+    (multiclip--debug (format "%d\r\n%s" size data))
+    )
   )
 
 (defun multiclip--get-data-from-clipboard-w32 ()
