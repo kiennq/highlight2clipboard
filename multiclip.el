@@ -176,7 +176,7 @@
   (set-process-filter multiclip--proc
                       (lambda (proc output)
                         (multiclip--debug output)
-                        (let ((set-content-len
+                        (let ((get-content-len
                                (lambda (buffer)
                                  (unless (= (buffer-size buffer) 0)
                                    (setq multiclip--content-len 0)
@@ -189,14 +189,15 @@
                                          (erase-buffer)
                                        ;; skip content-length line and an empty line after that
                                        (forward-line 1)
-                                       (delete-region (point-min) (point))))))))
+                                       (delete-region (point-min) (point))
+                                       (goto-char (point-max))))))))
                           (with-current-buffer (get-buffer-create "*multiclip temp*")
                             (cond
                              ;; at the begining of temp buffer
                              ((>= 1 (point))
                               (goto-char (point-max))
                               (insert output)
-                              (funcall set-content-len (current-buffer)))
+                              (funcall get-content-len (current-buffer)))
                              (t
                               (goto-char (point-max))
                               (insert output)))
@@ -217,7 +218,7 @@
                                                         (buffer-substring 1 (1+ multiclip--content-len))))))
                                 (delete-region 1 (1+ multiclip--content-len))
                                 (goto-char (point-min))
-                                (funcall set-content-len (current-buffer))
+                                (funcall get-content-len (current-buffer))
                                 )))
                           )))
   )
