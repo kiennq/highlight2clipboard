@@ -136,7 +136,7 @@
   (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
   (setq multiclip--proc (start-process "clipboard" "*clipboard*"
                                        (concat multiclip--directory "bin/csclip.exe")
-                                       "server" "-e"))
+                                       "server"))
   (multiclip--multiclip--command-dispatch)
   )
 
@@ -209,13 +209,12 @@
                                     (multiclip--debug (format "Content-length: %d" multiclip--content-len))
                                     (multiclip--debug (format "Buffer: %s"
                                                               (buffer-substring 1 (1+ multiclip--content-len))))
-                                    (multiclip--debug (format "Decoded: %s"
-                                                              (base64-decode-string
-                                                               (buffer-substring 1 (1+ multiclip--content-len)))))
+                                    ;; (multiclip--debug (format "Decoded: %s"
+                                    ;;                           (base64-decode-string
+                                    ;;                            (buffer-substring 1 (1+ multiclip--content-len)))))
                                     (funcall callback (json-read-from-string
-                                                       (base64-decode-string
                                                         ;; (point-min) == 1
-                                                        (buffer-substring 1 (1+ multiclip--content-len))))))
+                                                       (buffer-substring 1 (1+ multiclip--content-len)))))
                                 (delete-region 1 (1+ multiclip--content-len))
                                 (goto-char (point-min))
                                 (funcall get-content-len (current-buffer))
@@ -237,7 +236,7 @@
                  (setq multiclip--external-copy
                        (replace-regexp-in-string
                         "" ""
-                        (decode-coding-string (plist-get notify :args) 'utf-8))))
+                        (plist-get notify :args))))
                 ((string= (plist-get notify :command) multiclip--command-get)
                  (when multiclip--set-data-to-clipboard-function
                    (funcall multiclip--set-data-to-clipboard-function
@@ -372,11 +371,10 @@ are fully fontified."
   (let* ((text (json-encode
                 `((command . ,(or command multiclip--command-copy))
                   (data . ,(mapcar (lambda (x) `((cf . ,(car x)) (data . ,(cdr x)))) data)))))
-         (data (base64-encode-string (encode-coding-string text 'utf-8 t) 'no-line-break))
-         (size (length data)))
+         (size (length text)))
     (process-send-string multiclip--proc
-                         (format "%d\r\n%s" size data))
-    (multiclip--debug (format "%d\r\n%s" size data))
+                         (format "%d\r\n%s" size text))
+    (multiclip--debug (format "%d\r\n%s" size text))
     )
   )
 
