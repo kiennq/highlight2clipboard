@@ -137,7 +137,8 @@
   (setq multiclip--proc (start-process "clipboard" "*clipboard*"
                                        (concat multiclip--directory "bin/csclip.exe")
                                        "server"))
-  (multiclip--multiclip--command-dispatch)
+  (multiclip--send-command multiclip--command-paste nil)
+  (multiclip--process-command)
   )
 
 (defun multiclip-exit ()
@@ -225,7 +226,7 @@
 (defvar multiclip--last-copy nil "Last copied text.")
 (defvar multiclip--external-copy nil "External clipboard text, pushed to Emacs.")
 
-(defun multiclip--multiclip--command-dispatch ()
+(defun multiclip--process-command ()
   "Process notify from clipboard server proc."
   (deferred:$
     (multiclip--deferrize #'multiclip--set-process-filter)
@@ -238,13 +239,24 @@
                         "" ""
                         (plist-get notify :args))))
                 ((string= (plist-get notify :command) multiclip--command-get)
-                 (when multiclip--set-data-to-clipboard-function
-                   (funcall multiclip--set-data-to-clipboard-function
-                            `((,multiclip--format-html . ,(multiclip--htmlize multiclip--last-copy)))
-                            multiclip--command-put))
-                 ))
+                   (multiclip--send-command
+                    multiclip--command-put
+                    (multiclip--normalize-data
+                     `((,multiclip--format-html . ,(multiclip--htmlize multiclip--last-copy)))))))
           )))
   )
+
+(defun multiclip--send-command (command data)
+  "Send COMMAND with DATA to clipboard server proc."
+  (let* ((text (json-encode
+                `((command . ,command)
+                  (data . ,data))))
+         (size (length text)))
+    (process-send-string multiclip--proc
+                         (format "%d\r\n%s" size text))
+    (multiclip--debug (format "%d\r\n%s" size text)))
+  )
+
 
 ;;;###autoload
 (defun multiclip-ensure-buffer-is-fontified ()
@@ -366,16 +378,15 @@ are fully fontified."
 (defun multiclip--get-data-from-clipboard-osx ()
   )
 
-(defun multiclip--set-data-to-clipboard-w32 (data &optional command)
-  "DATA is a list of (format . text).  COMMAND has default value as copy."
-  (let* ((text (json-encode
-                `((command . ,(or command multiclip--command-copy))
-                  (data . ,(mapcar (lambda (x) `((cf . ,(car x)) (data . ,(cdr x)))) data)))))
-         (size (length text)))
-    (process-send-string multiclip--proc
-                         (format "%d\r\n%s" size text))
-    (multiclip--debug (format "%d\r\n%s" size text))
-    )
+(defun multiclip--normalize-data (data)
+  "DATA is a list of (format . text).  Convert to [{cf:format, data:text}] json."
+  (mapcar (lambda (x) `((cf . ,(car x)) (data . ,(cdr x)))) data)
+  )
+
+(defun multiclip--set-data-to-clipboard-w32 (data)
+  "DATA is a list of (format . text)."
+  (multiclip--send-command multiclip--command-copy
+                           (multiclip--normalize-data data))
   )
 
 (defun multiclip--get-data-from-clipboard-w32 ()
