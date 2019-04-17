@@ -134,9 +134,12 @@
   (interactive)
   (setq interprogram-cut-function 'multiclip-copy-to-clipboard)
   (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
-  (setq multiclip--proc (start-process "clipboard" "*clipboard*"
-                                       (concat multiclip--directory "bin/csclip.exe")
-                                       "server"))
+  (setq multiclip--proc (make-process
+                         :name "clipboard"
+                         :buffer "*clipboard*"
+                         :command `(,(concat multiclip--directory "bin/csclip.exe")
+                                    "server")
+                         :noquery t))
   (multiclip--send-command multiclip--command-paste nil)
   (multiclip--process-command)
   )
