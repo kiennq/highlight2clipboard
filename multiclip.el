@@ -137,8 +137,10 @@
   (setq multiclip--proc (make-process
                          :name "clipboard"
                          :buffer "*clipboard*"
-                         :command `(,(concat multiclip--directory "bin/csclip.exe")
-                                    "server")
+                         :command
+                         `(,(file-truename (concat multiclip--directory "bin/csclip.exe"))
+                           "server")
+                         :connection-type 'pipe
                          :noquery t))
   (multiclip--send-command multiclip--command-paste nil)
   (multiclip--process-command)
@@ -352,20 +354,26 @@ are fully fontified."
 (defvar multiclip--set-data-to-clipboard-function nil)
 (defvar multiclip--get-data-from-clipboard-function nil)
 
+(if (and (executable-find "uname")
+           (string-match
+            "Microsoft"
+            (shell-command-to-string "uname -r")))
+      (setq system-type 'wsl))
+
 (defun multiclip-set-defaults ()
   "Set up multiclip, or issue an error if system not supported."
+
   (cond ((eq system-type 'darwin)
          (setq multiclip--set-data-to-clipboard-function
                #'multiclip--set-data-to-clipboard-osx)
          (setq multiclip--get-data-from-clipboard-function
                  #'multiclip--get-data-from-clipboard-osx))
-        ((memq system-type '(windows-nt cygwin))
+        ((memq system-type '(windows-nt cygwin wsl))
          (setq multiclip--set-data-to-clipboard-function
                #'multiclip--set-data-to-clipboard-w32)
          (setq multiclip--get-data-from-clipboard-function
                  #'multiclip--get-data-from-clipboard-w32))
         (t (error "Unsupported system: %s" system-type))))
-
 
 (defun multiclip--set-data-to-clipboard-osx (data)
   ;; (call-process
