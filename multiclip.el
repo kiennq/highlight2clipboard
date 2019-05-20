@@ -5,7 +5,7 @@
 ;; Author: Anders Lindgren
 ;; Version: 0.0.2
 ;; Created: 2015-06-17
-;; Package-Requires: ((htmlize "1.47") (deferred "0.4.0"))
+;; Package-Requires: ((emacs "26.1") (htmlize "1.47"))
 ;; Keywords: tools
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -72,7 +72,6 @@
 
 (require 'htmlize)
 (require 'json)
-(require 'deferred)
 
 (defgroup multiclip nil
   "Support for exporting formatted text to the clipboard."
@@ -168,15 +167,6 @@
         (insert (format "%s\n" msg))
         (if popup? (pop-to-buffer (current-buffer))))))
 
-(defmacro multiclip--deferrize (orig-func &rest args)
-  "Change ORIG-FUNC (&rest ARGS CALLBACK) to deferred form."
-  (let* ((d (deferred:new #'identity))
-         (args (nconc args `((lambda (res)
-                               (deferred:callback-post ,d res))))))
-    `(progn
-       (funcall ,orig-func ,@args)
-       ,d)))
-
 (defun multiclip--set-process-filter (callback)
   "Apply CALLBACK to stiched output."
   (set-process-filter multiclip--proc
@@ -233,23 +223,20 @@
 
 (defun multiclip--process-command ()
   "Process notify from clipboard server proc."
-  (deferred:$
-    (multiclip--deferrize #'multiclip--set-process-filter)
-    (deferred:nextc it
-      #'(lambda (notify)
-          (cond ((string= (plist-get notify :command) multiclip--command-paste)
-                 (multiclip--debug (format "%s: %s" "args" (plist-get notify :args)))
-                 (setq multiclip--external-copy
-                       (replace-regexp-in-string
-                        "" ""
-                        (plist-get notify :args))))
-                ((string= (plist-get notify :command) multiclip--command-get)
-                   (multiclip--send-command
-                    multiclip--command-put
-                    (multiclip--normalize-data
-                     `((,multiclip--format-html . ,(multiclip--htmlize multiclip--last-copy)))))))
+  (multiclip--set-process-filter
+   (lambda (notify)
+     (cond ((string= (plist-get notify :command) multiclip--command-paste)
+            (multiclip--debug (format "%s: %s" "args" (plist-get notify :args)))
+            (setq multiclip--external-copy
+                  (replace-regexp-in-string
+                   "" ""
+                   (plist-get notify :args))))
+           ((string= (plist-get notify :command) multiclip--command-get)
+            (multiclip--send-command
+             multiclip--command-put
+             (multiclip--normalize-data
+              `((,multiclip--format-html . ,(multiclip--htmlize multiclip--last-copy)))))))
           )))
-  )
 
 (defun multiclip--send-command (command data)
   "Send COMMAND with DATA to clipboard server proc."
