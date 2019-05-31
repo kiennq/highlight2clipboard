@@ -5,7 +5,7 @@
 ;; Author: Anders Lindgren
 ;; Version: 0.0.2
 ;; Created: 2015-06-17
-;; Package-Requires: ((emacs "26.1") (htmlize "1.47"))
+;; Package-Requires: ((emacs "26.1") (htmlize "1.47") (jsonrpc "1.0.7") (s))
 ;; Keywords: tools
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -71,11 +71,18 @@
 
 
 (require 'htmlize)
-(require 'json)
+(require 'jsonrpc)
+(require 'pcase)
+(require 's)
 
 (defgroup multiclip nil
   "Support for exporting formatted text to the clipboard."
   :group 'faces)
+
+(defcustom multiclip-log-size 0
+  "Maximum size for logging jsonrpc event. 0 disables, nil means infinite."
+  :group 'multiclip
+  :type 'integer)
 
 (defvar multiclip--original-interprocess-cut-function
   interprogram-cut-function)
@@ -92,21 +99,16 @@
       (file-name-directory load-file-name)
     default-directory))
 
-;; Supported command format
+;; Supported jsonrpc method:
 ;; Sent:
-;; - copy:  <size>\r\n{command: copy, data: [{cf:, data:}+]}
-;; - put:   <size>\r\n{command: put, data: [{cf:, data:}]}
-;; - paste: <size>\r\n{command: put}
-;; Receive:
-;; - paste: <size>\r\n{command:<paste|get>, args:}
+;; - copy: [<text data>] -> nil
+;; - get: [<data format>] -> <requested data>
+;; Received:
+;; - paste: <text data> -> nil
+;; - get: <data format> -> <requested data>
 
 (defconst multiclip--format-html "html" "HTML format string.")
 (defconst multiclip--format-text "text" "Text format.")
-
-(defconst multiclip--command-paste "paste")
-(defconst multiclip--command-copy "copy")
-(defconst multiclip--command-get "get")
-(defconst multiclip--command-put "put")
 
 ;; ------------------------------------------------------------
 ;; Global minor mode
@@ -126,7 +128,8 @@
   (multiclip-set-defaults)
   (if multiclip-mode (multiclip-init) (multiclip-exit)))
 
-(defvar multiclip--proc nil "Server clipboard notifier process.")
+(defvar multiclip--proc nil "Server clipboard process.")
+(defvar multiclip--conn nil "Clipboard jsonrpc connection.")
 
 (defun multiclip-init ()
   "Init multiclip."
@@ -140,9 +143,21 @@
                          `(,(file-truename (concat multiclip--directory "bin/csclip.exe"))
                            "server")
                          :connection-type 'pipe
+                         :coding '(utf-8-unix . no-conversion)
                          :noquery t))
-  (multiclip--send-command multiclip--command-paste nil)
-  (multiclip--process-command)
+  (setq multiclip--conn (jsonrpc-process-connection
+                         :process multiclip--proc
+                         :events-buffer-scrollback-size multiclip-log-size
+                         :request-dispatcher #'multiclip--handle-request
+                         :notification-dispatcher #'multiclip--handle-request))
+  (jsonrpc-async-request multiclip--conn
+                         'get `(,multiclip--format-text)
+                         :success-fn
+                         (lambda (result)
+                           (multiclip--handle-paste result))
+                         :error-fn
+                         (lambda (err)
+                           (message "Got error: %s" err)))
   )
 
 (defun multiclip-exit ()
@@ -150,103 +165,44 @@
   (interactive)
   (setq interprogram-cut-function multiclip--original-interprocess-cut-function)
   (setq interprogram-paste-function multiclip--original-interprocess-paste-function)
-  (if multiclip--proc
-      (ignore-errors (set-process-query-on-exit-flag multiclip--proc nil)
-                     (kill-process multiclip--proc)
-                     (kill-buffer (process-buffer multiclip--proc))
-                     (setq multiclip--proc nil))))
+  (if multiclip--conn (jsonrpc-shutdown multiclip--conn))
+  )
 
 ;; ------------------------------------------------------------
 ;; Core functions.
 ;;
 
-(defsubst multiclip--debug (msg &optional erase? popup?)
-  (if multiclip-debug
-      (with-current-buffer (get-buffer-create "*multiclip debug*")
-        (if erase? (erase-buffer))
-        (insert (format "%s\n" msg))
-        (if popup? (pop-to-buffer (current-buffer))))))
-
-(defun multiclip--set-process-filter (callback)
-  "Apply CALLBACK to stiched output."
-  (set-process-filter multiclip--proc
-                      (lambda (proc output)
-                        (multiclip--debug output)
-                        (let ((get-content-len
-                               (lambda (buffer)
-                                 (unless (= (buffer-size buffer) 0)
-                                   (setq multiclip--content-len 0)
-                                   (with-current-buffer buffer
-                                     (goto-char (point-min))
-                                     (setq multiclip--content-len (string-to-number (thing-at-point 'line t)))
-                                     (multiclip--debug (format "Read-len: %d" multiclip--content-len))
-                                     (multiclip--debug (format "Read-buffer: %s" (buffer-string)))
-                                     (if (= 0 multiclip--content-len)
-                                         (erase-buffer)
-                                       ;; skip content-length line and an empty line after that
-                                       (forward-line 1)
-                                       (delete-region (point-min) (point))
-                                       (goto-char (point-max))))))))
-                          (with-current-buffer (get-buffer-create "*multiclip temp*")
-                            (cond
-                             ;; at the begining of temp buffer
-                             ((>= 1 (point))
-                              (goto-char (point-max))
-                              (insert output)
-                              (funcall get-content-len (current-buffer)))
-                             (t
-                              (goto-char (point-max))
-                              (insert output)))
-                            ;; all the data has been written
-                            (while (and (> multiclip--content-len 0) (> (point-max) multiclip--content-len))
-                              (unwind-protect
-                                  (let ((json-array-type 'list)
-                                        (json-object-type 'plist))
-                                    (multiclip--debug (format "Content-length: %d" multiclip--content-len))
-                                    (multiclip--debug (format "Buffer: %s"
-                                                              (buffer-substring 1 (1+ multiclip--content-len))))
-                                    ;; (multiclip--debug (format "Decoded: %s"
-                                    ;;                           (base64-decode-string
-                                    ;;                            (buffer-substring 1 (1+ multiclip--content-len)))))
-                                    (funcall callback (json-read-from-string
-                                                        ;; (point-min) == 1
-                                                       (buffer-substring 1 (1+ multiclip--content-len)))))
-                                (delete-region 1 (1+ multiclip--content-len))
-                                (goto-char (point-min))
-                                (funcall get-content-len (current-buffer))
-                                )))
-                          )))
-  )
-
 (defvar multiclip--last-copy nil "Last copied text.")
 (defvar multiclip--external-copy nil "External clipboard text, pushed to Emacs.")
 
-(defun multiclip--process-command ()
-  "Process notify from clipboard server proc."
-  (multiclip--set-process-filter
-   (lambda (notify)
-     (cond ((string= (plist-get notify :command) multiclip--command-paste)
-            (multiclip--debug (format "%s: %s" "args" (plist-get notify :args)))
-            (setq multiclip--external-copy
-                  (replace-regexp-in-string
-                   "" ""
-                   (plist-get notify :args))))
-           ((string= (plist-get notify :command) multiclip--command-get)
-            (multiclip--send-command
-             multiclip--command-put
-             (multiclip--normalize-data
-              `((,multiclip--format-html . ,(multiclip--htmlize multiclip--last-copy)))))))
-          )))
+(defun multiclip--handle-request (conn method params)
+  "Handling request from CONN with METHOD and PARAMS.
+This is used for both jsonrpc `notify' and `request'."
+  ;; Received:
+  ;; - paste: [<text data>] -> nil
+  ;; - get: [<data format>] -> <requested data>
+  (pcase method
+    ('paste
+     (multiclip--handle-paste (elt params 0)))
+    ('get
+     (multiclip--handle-get-data (elt params 0))))
+  )
 
-(defun multiclip--send-command (command data)
-  "Send COMMAND with DATA to clipboard server proc."
-  (let* ((text (json-encode
-                `((command . ,command)
-                  (data . ,data))))
-         (size (length text)))
-    (process-send-string multiclip--proc
-                         (format "%d\r\n%s" size text))
-    (multiclip--debug (format "%d\r\n%s" size text)))
+(defun multiclip--handle-paste (text)
+  "Paste text into `Emacs' clipboard."
+  (setq multiclip--external-copy
+        (if (s-contains-p "-dos" (symbol-name buffer-file-coding-system))
+            text
+          (replace-regexp-in-string
+           "" ""
+           text))))
+
+(defun multiclip--handle-get-data (cf)
+  "Render format CF to put into clipboard."
+  (pcase cf
+    ("html" (multiclip--htmlize multiclip--last-copy))
+    ("text" multiclip--last-copy)
+    (_ ""))
   )
 
 
@@ -273,6 +229,7 @@ are fully fontified."
   (interactive "r")
   (multiclip-ensure-buffer-is-fontified)
   (multiclip-copy-to-clipboard (buffer-substring beg end)))
+
 
 ;;;###autoload
 (defun multiclip-copy-buffer-to-clipboard ()
@@ -383,12 +340,10 @@ are fully fontified."
 
 (defun multiclip--set-data-to-clipboard-w32 (data)
   "DATA is a list of (format . text)."
-  (multiclip--send-command multiclip--command-copy
-                           (multiclip--normalize-data data))
-  )
+  (jsonrpc-notify multiclip--conn
+                  'copy `(,(multiclip--normalize-data data))))
 
 (defun multiclip--get-data-from-clipboard-w32 ()
-  "."
   (unless (string= multiclip--external-copy multiclip--last-copy)
     multiclip--external-copy))
 
