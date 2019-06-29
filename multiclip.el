@@ -114,6 +114,7 @@
 ;; Global minor mode
 ;;
 
+
 ;;;###autoload
 (define-minor-mode multiclip-mode
   "When active, cuts and copies are exported with formatting to the clipboard."
@@ -125,7 +126,6 @@
   :group 'multiclip
   ;; This will issue an error on unsupported systems, preventing our
   ;; hooks to be installed.
-  (multiclip-set-defaults)
   (if multiclip-mode (multiclip-init) (multiclip-exit)))
 
 (defvar multiclip--proc nil "Server clipboard process.")
@@ -298,25 +298,22 @@ are fully fontified."
 (defvar multiclip--set-data-to-clipboard-function nil)
 (defvar multiclip--get-data-from-clipboard-function nil)
 
-(if (and (executable-find "uname")
-           (string-match
-            "Microsoft"
-            (shell-command-to-string "uname -r")))
-      (setq system-type 'wsl))
-
-(defun multiclip-set-defaults ()
-  "Set up multiclip, or issue an error if system not supported."
-
+;; Set up multiclip, or issue an error if system not supported.
+(let ((system-type (or (and (executable-find "uname")
+                            (string-match "[Mm]icrosoft"
+                                          (shell-command-to-string "uname -r"))
+                            'wsl)
+                       system-type)))
   (cond ((eq system-type 'darwin)
          (setq multiclip--set-data-to-clipboard-function
                #'multiclip--set-data-to-clipboard-osx)
          (setq multiclip--get-data-from-clipboard-function
-                 #'multiclip--get-data-from-clipboard-osx))
+               #'multiclip--get-data-from-clipboard-osx))
         ((memq system-type '(windows-nt cygwin wsl))
          (setq multiclip--set-data-to-clipboard-function
                #'multiclip--set-data-to-clipboard-w32)
          (setq multiclip--get-data-from-clipboard-function
-                 #'multiclip--get-data-from-clipboard-w32))
+               #'multiclip--get-data-from-clipboard-w32))
         (t (error "Unsupported system: %s" system-type))))
 
 (defun multiclip--set-data-to-clipboard-osx (data)
