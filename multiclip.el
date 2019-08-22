@@ -45,7 +45,7 @@
 ;; Supported systems:
 ;;
 ;; Copying formatted text to the clipboard is highly system specific.
-;; Currently, MS-Windows are supported.  Contributions for
+;; Currently, MS-Windows and WSL are supported.  Contributions for
 ;; other systems are most welcome.
 ;;
 ;; Known problems:
@@ -80,14 +80,14 @@
   :group 'faces)
 
 (defcustom multiclip-log-size 0
-  "Maximum size for logging jsonrpc event. 0 disables, nil means infinite."
+  "Maximum size for logging jsonrpc event.  0 disables, nil means infinite."
   :group 'multiclip
   :type 'integer)
 
-(defvar multiclip--original-interprocess-cut-function
+(defvar multiclip--original-interprogram-cut-function
   interprogram-cut-function)
 
-(defvar multiclip--original-interprocess-paste-function
+(defvar multiclip--original-interprogram-paste-function
   interprogram-paste-function)
 
 (defvar multiclip--content-len 0 "Content length of a message.")
@@ -110,6 +110,13 @@
 (defconst multiclip--format-html "html" "HTML format string.")
 (defconst multiclip--format-text "text" "Text format.")
 
+(defvar multiclip--set-data-to-clipboard-function nil)
+(defvar multiclip--get-data-from-clipboard-function nil)
+
+(defconst multiclip--system-type
+  (or (and (executable-find "wslpath") 'gnu/wsl) system-type)
+  "Extended `system-type' that recognize wsl.")
+
 ;; ------------------------------------------------------------
 ;; Global minor mode
 ;;
@@ -128,7 +135,6 @@
   ;; hooks to be installed.
   (if multiclip-mode (multiclip-init) (multiclip-exit)))
 
-(defvar multiclip--proc nil "Server clipboard process.")
 (defvar multiclip--conn nil "Clipboard jsonrpc connection.")
 
 (defun multiclip-init ()
@@ -136,35 +142,34 @@
   (interactive)
   (setq interprogram-cut-function 'multiclip-copy-to-clipboard)
   (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
-  (setq multiclip--proc (make-process
-                         :name "clipboard"
-                         :buffer "*clipboard*"
-                         :command
-                         `(,(file-truename (concat multiclip--directory "bin/csclip.exe"))
-                           "server")
-                         :connection-type 'pipe
-                         :coding '(utf-8-unix . no-conversion)
-                         :noquery t))
-  (setq multiclip--conn (jsonrpc-process-connection
-                         :process multiclip--proc
-                         :events-buffer-scrollback-size multiclip-log-size
-                         :request-dispatcher #'multiclip--handle-request
-                         :notification-dispatcher #'multiclip--handle-request))
-  (jsonrpc-async-request multiclip--conn
-                         'get `(,multiclip--format-text)
-                         :success-fn
-                         (lambda (result)
-                           (multiclip--handle-paste result))
-                         :error-fn
-                         (lambda (err)
-                           (message "Got error: %s" err)))
-  )
+  (when (memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
+    (setq multiclip--conn (jsonrpc-process-connection
+                           :process (make-process
+                                     :name "clipboard"
+                                     :buffer "*clipboard*"
+                                     :command
+                                     `(,(file-truename (concat multiclip--directory "bin/csclip.exe"))
+                                       "server")
+                                     :connection-type 'pipe
+                                     :coding '(utf-8-unix . no-conversion)
+                                     :noquery t)
+                           :events-buffer-scrollback-size multiclip-log-size
+                           :request-dispatcher #'multiclip--handle-request
+                           :notification-dispatcher #'multiclip--handle-request))
+    (jsonrpc-async-request multiclip--conn
+                           'get `(,multiclip--format-text)
+                           :success-fn
+                           (lambda (result)
+                             (multiclip--handle-paste result))
+                           :error-fn
+                           (lambda (err)
+                             (message "Got error: %s" err)))))
 
 (defun multiclip-exit ()
-  "Kill clipboard process and clean up."
+  "Kill clipboard connection and clean up."
   (interactive)
-  (setq interprogram-cut-function multiclip--original-interprocess-cut-function)
-  (setq interprogram-paste-function multiclip--original-interprocess-paste-function)
+  (setq interprogram-cut-function multiclip--original-interprogram-cut-function)
+  (setq interprogram-paste-function multiclip--original-interprogram-paste-function)
   (if multiclip--conn (jsonrpc-shutdown multiclip--conn))
   )
 
@@ -175,7 +180,7 @@
 (defvar multiclip--last-copy nil "Last copied text.")
 (defvar multiclip--external-copy nil "External clipboard text, pushed to Emacs.")
 
-(defun multiclip--handle-request (conn method params)
+(defun multiclip--handle-request (_ method params)
   "Handling request from CONN with METHOD and PARAMS.
 This is used for both jsonrpc `notify' and `request'."
   ;; Received:
@@ -189,22 +194,16 @@ This is used for both jsonrpc `notify' and `request'."
   )
 
 (defun multiclip--handle-paste (text)
-  "Paste text into `Emacs' clipboard."
+  "Paste TEXT into `Emacs' clipboard."
   (setq multiclip--external-copy
-        (if (s-contains-p "-dos" (symbol-name buffer-file-coding-system))
-            text
-          (replace-regexp-in-string
-           "" ""
-           text))))
+          (replace-regexp-in-string "\r" "" text)))
 
 (defun multiclip--handle-get-data (cf)
   "Render format CF to put into clipboard."
   (pcase cf
     ("html" (multiclip--htmlize multiclip--last-copy))
     ("text" multiclip--last-copy)
-    (_ ""))
-  )
-
+    (_ "")))
 
 ;;;###autoload
 (defun multiclip-ensure-buffer-is-fontified ()
@@ -278,7 +277,7 @@ are fully fontified."
   "Copy TEXT with formatting to the system clipboard."
   (prog1
       ;; Set the normal clipboard string(s).
-      ;; (funcall multiclip--original-interprocess-cut-function text)
+      ;; (funcall multiclip--original-interprogram-cut-function text)
       (setq multiclip--last-copy text)
       (setq multiclip--external-copy text)
     ;; Add addition flavor(s)
@@ -295,28 +294,20 @@ are fully fontified."
 ;; System-specific support.
 ;;
 
-(defvar multiclip--set-data-to-clipboard-function nil)
-(defvar multiclip--get-data-from-clipboard-function nil)
-
 ;; Set up multiclip, or issue an error if system not supported.
-(let ((system-type (or (and (executable-find "uname")
-                            (string-match "[Mm]icrosoft"
-                                          (shell-command-to-string "uname -r"))
-                            'wsl)
-                       system-type)))
-  (cond ((eq system-type 'darwin)
-         (setq multiclip--set-data-to-clipboard-function
-               #'multiclip--set-data-to-clipboard-osx)
-         (setq multiclip--get-data-from-clipboard-function
-               #'multiclip--get-data-from-clipboard-osx))
-        ((memq system-type '(windows-nt cygwin wsl))
-         (setq multiclip--set-data-to-clipboard-function
-               #'multiclip--set-data-to-clipboard-w32)
-         (setq multiclip--get-data-from-clipboard-function
-               #'multiclip--get-data-from-clipboard-w32))
-        (t (error "Unsupported system: %s" system-type))))
+(cond ((eq multiclip--system-type 'darwin)
+       (setq multiclip--set-data-to-clipboard-function
+             #'multiclip--set-data-to-clipboard-osx)
+       (setq multiclip--get-data-from-clipboard-function
+             #'multiclip--get-data-from-clipboard-osx))
+      ((memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
+       (setq multiclip--set-data-to-clipboard-function
+             #'multiclip--set-data-to-clipboard-w32)
+       (setq multiclip--get-data-from-clipboard-function
+             #'multiclip--get-data-from-clipboard-w32))
+      (t (error "Unsupported system: %s" multiclip--system-type)))
 
-(defun multiclip--set-data-to-clipboard-osx (data)
+(defun multiclip--set-data-to-clipboard-osx (_)
   ;; (call-process
   ;;  "python"
   ;;  nil
@@ -332,8 +323,7 @@ are fully fontified."
 
 (defun multiclip--normalize-data (data)
   "DATA is a list of (format . text).  Convert to [{cf:format, data:text}] json."
-  (mapcar (lambda (x) `((cf . ,(car x)) (data . ,(cdr x)))) data)
-  )
+  (mapcar (lambda (x) `((cf . ,(car x)) (data . ,(cdr x)))) data))
 
 (defun multiclip--set-data-to-clipboard-w32 (data)
   "DATA is a list of (format . text)."
@@ -341,6 +331,7 @@ are fully fontified."
                   'copy `(,(multiclip--normalize-data data))))
 
 (defun multiclip--get-data-from-clipboard-w32 ()
+  "Get data from clipboard, need to check internal state before set."
   (unless (string= multiclip--external-copy multiclip--last-copy)
     multiclip--external-copy))
 
