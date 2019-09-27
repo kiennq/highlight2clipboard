@@ -216,7 +216,7 @@ This is used for both jsonrpc `notify' and `request'."
              ;; buffers.)
              (not (and (eq major-mode 'help-mode)
                        (not font-lock-defaults))))
-    (font-lock-fontify-region (point-min) (point-max))))
+    (font-lock-ensure)))
 
 
 ;;;###autoload
