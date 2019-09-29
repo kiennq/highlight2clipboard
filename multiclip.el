@@ -177,7 +177,6 @@
 ;; Core functions.
 ;;
 
-(defvar multiclip--last-copy nil "Last copied text.")
 (defvar multiclip--external-copy nil "External clipboard text, pushed to Emacs.")
 
 (defun multiclip--handle-request (_ method params)
@@ -201,8 +200,8 @@ This is used for both jsonrpc `notify' and `request'."
 (defun multiclip--handle-get-data (cf)
   "Render format CF to put into clipboard."
   (pcase cf
-    ("html" (multiclip--htmlize multiclip--last-copy))
-    ("text" multiclip--last-copy)
+    ("html" (multiclip--htmlize (car kill-ring)))
+    ("text" (car kill-ring))
     (_ "")))
 
 ;;;###autoload
@@ -227,7 +226,7 @@ Unlike using multiclip mode, this ensure that buffers
 are fully fontified."
   (interactive "r")
   (multiclip-ensure-buffer-is-fontified)
-  (multiclip-copy-to-clipboard (buffer-substring beg end)))
+  (kill-new (buffer-substring beg end)))
 
 
 ;;;###autoload
@@ -278,7 +277,6 @@ are fully fontified."
   (prog1
       ;; Set the normal clipboard string(s).
       ;; (funcall multiclip--original-interprogram-cut-function text)
-      (setq multiclip--last-copy text)
       (setq multiclip--external-copy text)
     ;; Add addition flavor(s)
       (when multiclip--set-data-to-clipboard-function
@@ -332,7 +330,7 @@ are fully fontified."
 
 (defun multiclip--get-data-from-clipboard-w32 ()
   "Get data from clipboard, need to check internal state before set."
-  (unless (string= multiclip--external-copy multiclip--last-copy)
+  (unless (string= multiclip--external-copy (car kill-ring))
     multiclip--external-copy))
 
 (provide 'multiclip)
