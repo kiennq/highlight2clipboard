@@ -3,9 +3,10 @@
 ;; Copyright (C) 2015 Anders Lindgren
 
 ;; Author: Anders Lindgren
-;; Version: 0.0.2
+;; Maintainer: Kien Nguyen
+;; Version: 0.5
 ;; Created: 2015-06-17
-;; Package-Requires: ((emacs "26.1") (htmlize "1.47") (jsonrpc "1.0.7") (s))
+;; Package-Requires: ((emacs "26.1") (htmlize "1.47") (jsonrpc "1.0.7"))
 ;; Keywords: tools
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -73,7 +74,6 @@
 (require 'htmlize)
 (require 'jsonrpc)
 (require 'pcase)
-(require 's)
 
 (defgroup multiclip nil
   "Support for exporting formatted text to the clipboard."
@@ -157,7 +157,7 @@
                            :request-dispatcher #'multiclip--handle-request
                            :notification-dispatcher #'multiclip--handle-request))
     (jsonrpc-async-request multiclip--conn
-                           'get `(,multiclip--format-text)
+                           'get `[,multiclip--format-text]
                            :success-fn
                            (lambda (result)
                              (multiclip--handle-paste result))
@@ -321,12 +321,12 @@ are fully fontified."
 
 (defun multiclip--normalize-data (data)
   "DATA is a list of (format . text).  Convert to [{cf:format, data:text}] json."
-  (mapcar (lambda (x) `((cf . ,(car x)) (data . ,(cdr x)))) data))
+  (apply #'vector (mapcar (lambda (x) `(:cf ,(car x) :data ,(cdr x))) data)))
 
 (defun multiclip--set-data-to-clipboard-w32 (data)
   "DATA is a list of (format . text)."
   (jsonrpc-notify multiclip--conn
-                  'copy `(,(multiclip--normalize-data data))))
+                  'copy `[,(multiclip--normalize-data data)]))
 
 (defun multiclip--get-data-from-clipboard-w32 ()
   "Get data from clipboard, need to check internal state before set."
