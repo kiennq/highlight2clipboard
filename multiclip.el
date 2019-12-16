@@ -84,6 +84,16 @@
   :group 'multiclip
   :type 'integer)
 
+(defcustom multiclip-host "127.0.0.1"
+  "Host of csclip server."
+  :group 'multiclip
+  :type 'string)
+
+(defcustom multiclip-port 9123
+  "Port of csclip server."
+  :group 'multiclip
+  :type 'integer)
+
 (defvar multiclip--original-interprogram-cut-function
   interprogram-cut-function)
 
@@ -143,14 +153,15 @@
   (setq interprogram-cut-function 'multiclip-copy-to-clipboard)
   (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
   (when (memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
+    (call-process (file-truename (concat multiclip--directory "bin/csclip.exe"))
+                  nil 0 nil "server")
     (setq multiclip--conn (jsonrpc-process-connection
-                           :process (make-process
+                           :process (make-network-process
                                      :name "clipboard"
                                      :buffer "*clipboard*"
-                                     :command
-                                     `(,(file-truename (concat multiclip--directory "bin/csclip.exe"))
-                                       "server")
-                                     :connection-type 'pipe
+                                     :host multiclip-host
+                                     :service multiclip-port
+                                     :connection-type 'stream
                                      :coding '(utf-8-unix . no-conversion)
                                      :noquery t)
                            :events-buffer-scrollback-size multiclip-log-size
@@ -295,13 +306,13 @@ are fully fontified."
 ;; Set up multiclip, or issue an error if system not supported.
 (cond ((eq multiclip--system-type 'darwin)
        (setq multiclip--set-data-to-clipboard-function
-             #'multiclip--set-data-to-clipboard-osx)
-       (setq multiclip--get-data-from-clipboard-function
+             #'multiclip--set-data-to-clipboard-osx
+             multiclip--get-data-from-clipboard-function
              #'multiclip--get-data-from-clipboard-osx))
       ((memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
        (setq multiclip--set-data-to-clipboard-function
-             #'multiclip--set-data-to-clipboard-w32)
-       (setq multiclip--get-data-from-clipboard-function
+             #'multiclip--set-data-to-clipboard-w32
+             multiclip--get-data-from-clipboard-function
              #'multiclip--get-data-from-clipboard-w32))
       (t (error "Unsupported system: %s" multiclip--system-type)))
 
