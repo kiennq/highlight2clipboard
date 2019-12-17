@@ -163,7 +163,8 @@
                                      :service multiclip-port
                                      :connection-type 'stream
                                      :coding '(utf-8-unix . no-conversion)
-                                     :noquery t)
+                                     :noquery t
+                                     :nowait t)
                            :events-buffer-scrollback-size multiclip-log-size
                            :request-dispatcher #'multiclip--handle-request
                            :notification-dispatcher #'multiclip--handle-request))
