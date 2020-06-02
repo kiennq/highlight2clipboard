@@ -81,18 +81,19 @@
 
 (defcustom multiclip-log-size 0
   "Maximum size for logging jsonrpc event.  0 disables, nil means infinite."
-  :group 'multiclip
   :type 'integer)
 
 (defcustom multiclip-host "127.0.0.1"
   "Host of csclip server."
-  :group 'multiclip
   :type 'string)
 
 (defcustom multiclip-port 9123
   "Port of csclip server."
-  :group 'multiclip
   :type 'integer)
+
+(defcustom multiclip-enable-clipboard-history t
+  "Enable clipboard history."
+  :type 'boolean)
 
 (defvar multiclip--original-interprogram-cut-function
   interprogram-cut-function)
@@ -206,8 +207,12 @@ This is used for both jsonrpc `notify' and `request'."
 
 (defun multiclip--handle-paste (text)
   "Paste TEXT into `Emacs' clipboard."
-  (setq multiclip--external-copy
-          (replace-regexp-in-string "\r" "" text)))
+  (let ((txt (replace-regexp-in-string "\r" "" text))
+        interprogram-cut-function)
+    (when (and multiclip-enable-clipboard-history
+               (not (equal txt (car kill-ring))))
+      (kill-new txt))
+    (setq multiclip--external-copy txt)))
 
 (defun multiclip--handle-get-data (cf)
   "Render format CF to put into clipboard."
@@ -342,7 +347,7 @@ are fully fontified."
 
 (defun multiclip--get-data-from-clipboard-w32 ()
   "Get data from clipboard, need to check internal state before set."
-  (unless (string= multiclip--external-copy (car kill-ring))
+  (unless (equal multiclip--external-copy (car kill-ring))
     multiclip--external-copy))
 
 (provide 'multiclip)
