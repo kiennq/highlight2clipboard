@@ -29,44 +29,7 @@
 ;; syntax highlighted source code into word processors and mail
 ;; editors.
 ;; Also, this package acts as clipboard provider, completely short-circut
-;; `Emacs'' system clipboard call.
-;;
-;; Usage:
-;;
-;; * `M-x multiclip-copy-region-to-clipboard RET' -- Copy
-;;   the region, with formatting, to the clipboard.
-;;
-;; * `M-x multiclip-copy-buffer-to-clipboard RET' -- Copy
-;;   the buffer, with formatting, to the clipboard.
-;;
-;; * multiclip mode -- Global minor mode, when enabled, all
-;;   copies and cuts are exported, with formatting information, to the
-;;   clipboard.
-;;
-;; Supported systems:
-;;
-;; Copying formatted text to the clipboard is highly system specific.
-;; Currently, MS-Windows and WSL are supported.  Contributions for
-;; other systems are most welcome.
-;;
-;; Known problems:
-;;
-;; Font Lock mode, the system providing syntax highlighting in Emacs,
-;; use "lazy highlighting".  Effectively, this mean that only the
-;; visible parts of a buffer are highlighted.  The problem with this is
-;; that when copying text to the clipboard, only the highlighted parts
-;; gets formatting information.  To get around this, walk through the
-;; buffer, use `multiclip-ensure-buffer-is-fontified', or
-;; use one of the `multiclip-copy-' functions.
-;;
-;; Implementation:
-;;
-;; This package use the package `htmlize' to create an HTML version of
-;; a highlighted text.  This is added as a new flavor to the clipboard,
-;; allowing an application to pick the most suited version.
-;; Additional to that, clipboard's changes are now monitored and will be
-;; reflect to `Emacs' before hand, clipboard delay rendering also supported.
-;; Copy & Paste and be pleasingly fast.
+;; `Emacs' system clipboard call.
 
 ;;; Code:
 
@@ -74,6 +37,7 @@
 (require 'htmlize)
 (require 'jsonrpc)
 (require 'pcase)
+(require 'url)
 
 (defgroup multiclip nil
   "Support for exporting formatted text to the clipboard."
@@ -95,6 +59,11 @@
   "Enable clipboard history."
   :type 'boolean)
 
+(defcustom multiclip-bin (expand-file-name ".cache/multiclip/csclip.exe"
+                                           user-emacs-directory)
+  "Path to `multiclip' compatible server binary."
+  :type 'file)
+
 (defvar multiclip--original-interprogram-cut-function
   interprogram-cut-function)
 
@@ -104,11 +73,6 @@
 (defvar multiclip--content-len 0 "Content length of a message.")
 
 (defvar multiclip-debug nil "Enable debug mode.")
-
-(defconst multiclip--directory
-  (if load-file-name
-      (file-name-directory load-file-name)
-    default-directory))
 
 ;; Supported jsonrpc method:
 ;; Sent:
@@ -144,17 +108,18 @@
   :group 'multiclip
   ;; This will issue an error on unsupported systems, preventing our
   ;; hooks to be installed.
-  (if multiclip-mode (multiclip-init) (multiclip-exit)))
+  (if multiclip-mode (multiclip--init) (multiclip--exit)))
 
 (defvar multiclip--conn nil "Clipboard jsonrpc connection.")
 
-(defun multiclip-init ()
+(defun multiclip--init ()
   "Init multiclip."
   (interactive)
+  (multiclip-ensure-binary)
   (setq interprogram-cut-function 'multiclip-copy-to-clipboard)
   (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
   (when (memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
-    (call-process (file-truename (concat multiclip--directory "bin/csclip.exe"))
+    (call-process (file-truename multiclip-bin)
                   nil 0 nil "server")
     (setq multiclip--conn (jsonrpc-process-connection
                            :process (make-network-process
@@ -178,7 +143,7 @@
                            (lambda (err)
                              (message "Got error: %s" err)))))
 
-(defun multiclip-exit ()
+(defun multiclip--exit ()
   "Kill clipboard connection and clean up."
   (interactive)
   (setq interprogram-cut-function multiclip--original-interprogram-cut-function)
@@ -305,36 +270,18 @@ are fully fontified."
 (defun multiclip-paste-from-clipboard ()
   "Paste from system clipboard."
   (funcall multiclip--get-data-from-clipboard-function))
+
 ;; ------------------------------------------------------------
 ;; System-specific support.
 ;;
 
 ;; Set up multiclip, or issue an error if system not supported.
-(cond ((eq multiclip--system-type 'darwin)
-       (setq multiclip--set-data-to-clipboard-function
-             #'multiclip--set-data-to-clipboard-osx
-             multiclip--get-data-from-clipboard-function
-             #'multiclip--get-data-from-clipboard-osx))
-      ((memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
+(cond ((memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
        (setq multiclip--set-data-to-clipboard-function
              #'multiclip--set-data-to-clipboard-w32
              multiclip--get-data-from-clipboard-function
              #'multiclip--get-data-from-clipboard-w32))
       (t (error "Unsupported system: %s" multiclip--system-type)))
-
-(defun multiclip--set-data-to-clipboard-osx (_)
-  ;; (call-process
-  ;;  "python"
-  ;;  nil
-  ;;  0                                  ; <- Discard and don't wait
-  ;;  nil
-  ;;  (concat multiclip--directory
-  ;;          "bin/multiclip-osx.py")
-  ;;  file-name)
-  )
-
-(defun multiclip--get-data-from-clipboard-osx ()
-  )
 
 (defun multiclip--normalize-data (data)
   "DATA is a list of (format . text).  Convert to [{cf:format, data:text}] json."
@@ -349,6 +296,29 @@ are fully fontified."
   "Get data from clipboard, need to check internal state before set."
   (unless (equal multiclip--external-copy (car kill-ring))
     multiclip--external-copy))
+
+;; Utils
+(declare-function tar-untar-buffer "ext:tar-mode")
+
+(defun multiclip-ensure-binary (&optional forced)
+  "Ensure the server binary is installed.
+Will redownload if FORCED."
+  (interactive "P")
+  (unless (and (not forced)
+               (executable-find multiclip-bin))
+    (let* ((url "https://github.com/kiennq/csclip/releases/latest/download/csclip.tar.xz")
+           (exec-path (append exec-path `(,(expand-file-name
+                                            (concat exec-directory "../../../../bin")))))
+           (default-directory (file-name-directory multiclip-bin))
+           (bin-file "csclip.tar.xz"))
+      (unless (file-directory-p default-directory)
+        (make-directory default-directory 'parents))
+      (url-copy-file url bin-file 'ok-if-already-exists)
+      (require 'tar-mode)
+      (with-temp-buffer
+        (insert-file-contents bin-file)
+        (tar-mode)
+        (tar-untar-buffer)))))
 
 (provide 'multiclip)
 
