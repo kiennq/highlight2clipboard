@@ -51,9 +51,9 @@
   "Host of csclip server."
   :type 'string)
 
-(defcustom multiclip-port 9123
+(defcustom multiclip-port "9123"
   "Port of csclip server."
-  :type 'integer)
+  :type 'string)
 
 (defcustom multiclip-enable-clipboard-history t
   "Enable clipboard history."
@@ -120,7 +120,7 @@
   (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
   (when (memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
     (call-process (file-truename multiclip-bin)
-                  nil 0 nil "server")
+                  nil 0 nil "server" "-p" multiclip-port)
     (setq multiclip--conn (jsonrpc-process-connection
                            :process (make-network-process
                                      :name "clipboard"
