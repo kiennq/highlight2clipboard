@@ -1,0 +1,9 @@
+*~
+*.swp
+tags
+.DS_Store
+.#*
+*.elc
+dist/
+.cask/
+emacs_backtrace.*
