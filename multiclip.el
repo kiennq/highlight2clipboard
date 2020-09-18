@@ -256,16 +256,16 @@ are fully fontified."
 
 (defun multiclip-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
-  (prog1
-      ;; Set the normal clipboard string(s).
-      ;; (funcall multiclip--original-interprogram-cut-function text)
-      (setq multiclip--external-copy text)
-    ;; Add addition flavor(s)
+  (condition-case-unless-debug nil
       (when multiclip--set-data-to-clipboard-function
         (funcall multiclip--set-data-to-clipboard-function
                  `((,multiclip--format-text . ,text)
                    (,multiclip--format-html))))
-))
+    (error
+     ;; fall back to original function
+     (funcall multiclip--original-interprogram-cut-function text)))
+  ;; Set the external clipboard string(s).
+  (setq multiclip--external-copy text))
 
 (defun multiclip-paste-from-clipboard ()
   "Paste from system clipboard."
