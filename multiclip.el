@@ -115,6 +115,14 @@
 (defun multiclip--init ()
   "Init multiclip."
   (interactive)
+  ;; Set up multiclip, or issue an error if system not supported.
+  (cond ((memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
+         (setq multiclip--set-data-to-clipboard-function
+               #'multiclip--set-data-to-clipboard-w32
+               multiclip--get-data-from-clipboard-function
+               #'multiclip--get-data-from-clipboard-w32))
+        (t (error "Unsupported system: %s" multiclip--system-type)))
+
   (multiclip-ensure-binary)
   (setq interprogram-cut-function 'multiclip-copy-to-clipboard)
   (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
@@ -148,8 +156,7 @@
   (interactive)
   (setq interprogram-cut-function multiclip--original-interprogram-cut-function)
   (setq interprogram-paste-function multiclip--original-interprogram-paste-function)
-  (if multiclip--conn (jsonrpc-shutdown multiclip--conn))
-  )
+  (if multiclip--conn (jsonrpc-shutdown multiclip--conn)))
 
 ;; ------------------------------------------------------------
 ;; Core functions.
@@ -274,14 +281,6 @@ are fully fontified."
 ;; ------------------------------------------------------------
 ;; System-specific support.
 ;;
-
-;; Set up multiclip, or issue an error if system not supported.
-(cond ((memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
-       (setq multiclip--set-data-to-clipboard-function
-             #'multiclip--set-data-to-clipboard-w32
-             multiclip--get-data-from-clipboard-function
-             #'multiclip--get-data-from-clipboard-w32))
-      (t (error "Unsupported system: %s" multiclip--system-type)))
 
 (defun multiclip--normalize-data (data)
   "DATA is a list of (format . text).  Convert to [{cf:format, data:text}] json."
