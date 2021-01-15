@@ -305,11 +305,11 @@ Will redownload if FORCED."
   (interactive "P")
   (unless (and (not forced)
                (executable-find multiclip-bin))
-    (let* ((url "https://github.com/kiennq/csclip/releases/latest/download/csclip.tar.xz")
+    (let* ((url "https://github.com/kiennq/csclip/releases/latest/download/csclip.tar.zst")
            (exec-path (append exec-path `(,(expand-file-name
                                             (concat exec-directory "../../../../bin")))))
            (default-directory (file-name-directory multiclip-bin))
-           (bin-file "csclip.tar.xz"))
+           (bin-file "csclip.tar.zst"))
       (unless (file-directory-p default-directory)
         (make-directory default-directory 'parents))
       (url-copy-file url bin-file 'ok-if-already-exists)
