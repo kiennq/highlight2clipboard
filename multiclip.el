@@ -100,9 +100,6 @@
 ;;;###autoload
 (define-minor-mode multiclip-mode
   "When active, cuts and copies are exported with formatting to the clipboard."
-  nil
-  nil
-  nil
   :global t
   :lighter " clipboard"
   :group 'multiclip
