@@ -124,8 +124,10 @@
   (setq interprogram-cut-function 'multiclip-copy-to-clipboard)
   (setq interprogram-paste-function 'multiclip-paste-from-clipboard)
   (when (memq multiclip--system-type '(windows-nt cygwin gnu/wsl))
-    (call-process (file-truename multiclip-bin)
-                  nil 0 nil "server" "-p" multiclip-port)
+    (let ((default-directory (expand-file-name "~")))
+      (make-process :name "csclip"
+                    :command `(,(file-truename multiclip-bin) "server"
+                               "-p" ,multiclip-port)))
     (setq multiclip--conn (jsonrpc-process-connection
                            :process (make-network-process
                                      :name "clipboard"
