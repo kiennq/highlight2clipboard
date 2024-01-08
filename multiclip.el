@@ -134,11 +134,11 @@
                                      :buffer "*clipboard*"
                                      :host multiclip-host
                                      :service multiclip-port
-                                     :connection-type 'stream
+                                     :type nil
                                      :coding '(utf-8-unix . no-conversion)
                                      :noquery t
                                      :nowait t)
-                           :events-buffer-scrollback-size multiclip-log-size
+                           :events-buffer-config `(:size ,multiclip-log-size)
                            :request-dispatcher #'multiclip--handle-request
                            :notification-dispatcher #'multiclip--handle-request))
     (jsonrpc-async-request multiclip--conn
