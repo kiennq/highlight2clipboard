@@ -64,6 +64,11 @@
   "Path to `multiclip' compatible server binary."
   :type 'file)
 
+(defcustom multiclip-assets-subpath "assets"
+  "Directory subpath of where blob assets will be saved.
+The subpath is from the current folder."
+  :type 'string)
+
 (defvar multiclip--original-interprogram-cut-function
   interprogram-cut-function)
 
@@ -84,6 +89,7 @@
 
 (defconst multiclip--format-html "html" "HTML format string.")
 (defconst multiclip--format-text "text" "Text format.")
+(defconst multiclip--format-bitmap "bitmap" "Bitmap format.")
 
 (defvar multiclip--set-data-to-clipboard-function nil)
 (defvar multiclip--get-data-from-clipboard-function nil)
@@ -148,7 +154,8 @@
                              (multiclip--handle-paste result))
                            :error-fn
                            (lambda (err)
-                             (message "Got error: %s" err)))))
+                             (message "Got error: %s" err))
+                           :deferred t)))
 
 (defun multiclip--exit ()
   "Kill clipboard connection and clean up."
@@ -167,7 +174,7 @@
   "Handling request from CONN with METHOD and PARAMS.
 This is used for both jsonrpc `notify' and `request'."
   ;; Received:
-  ;; - paste: [<text data>] -> nil
+  ;; - paste: [(:cf :data)] -> nil
   ;; - get: [<data format>] -> <requested data>
   (pcase method
     ('paste
@@ -176,14 +183,22 @@ This is used for both jsonrpc `notify' and `request'."
      (multiclip--handle-get-data (elt params 0))))
   )
 
-(defun multiclip--handle-paste (text)
-  "Paste TEXT into `Emacs' clipboard."
-  (let ((txt (replace-regexp-in-string "\r" "" text))
-        interprogram-cut-function)
-    (when (and multiclip-enable-clipboard-history
-               (not (equal txt (car kill-ring))))
-      (kill-new txt))
-    (setq multiclip--external-copy txt)))
+(defvar multiclip--last-paste-is-blob nil "Non-nil if the last paste is a blob.")
+
+(defun multiclip--handle-paste (payload)
+  "Paste PAYLOAD into `Emacs' clipboard."
+  (cond
+   ((equal (plist-get payload :cf) multiclip--format-text)
+    (setq multiclip--last-paste-is-blob nil)
+    (let* ((text (plist-get payload :data))
+           (txt (replace-regexp-in-string "\r" "" text))
+           interprogram-cut-function)
+      (when (and multiclip-enable-clipboard-history
+                 (not (equal txt (car kill-ring))))
+        (kill-new txt))
+      (setq multiclip--external-copy txt)))
+   ((equal (plist-get payload :cf) multiclip--format-bitmap)
+    (setq multiclip--last-paste-is-blob t))))
 
 (defun multiclip--handle-get-data (cf)
   "Render format CF to put into clipboard."
@@ -191,6 +206,25 @@ This is used for both jsonrpc `notify' and `request'."
     ("html" (multiclip--htmlize (car kill-ring)))
     ("text" (car kill-ring))
     (_ "")))
+
+(defun multiclip--request-save-blob (cf)
+  "Render format CF to file and save it to subpath of `multiclip-assets-subpath'."
+  (when-let ((_ buffer-file-name)
+             (resp (jsonrpc-request multiclip--conn
+                                    'get-to-file
+                                    `[( :cf ,cf
+                                        :store_path ,(expand-file-name multiclip-assets-subpath
+                                                                       (file-name-directory buffer-file-name)))]
+                                    :timeout 2
+                                    :cancel-on-input t
+                                    :cancel-on-input-retval nil)))
+    (setq multiclip--external-copy
+          (cond
+           ((derived-mode-p '(org-mode))
+            (format "[[%s]]" (string-join `("." ,multiclip-assets-subpath ,resp) "/")))
+           (t
+            (format "![%s](%s)" resp
+                    (string-join `("." ,multiclip-assets-subpath ,resp) "/")))))))
 
 ;;;###autoload
 (defun multiclip-ensure-buffer-is-fontified ()
@@ -265,8 +299,8 @@ are fully fontified."
   (condition-case-unless-debug nil
       (when multiclip--set-data-to-clipboard-function
         (funcall multiclip--set-data-to-clipboard-function
-                 `((,multiclip--format-text . ,text)
-                   (,multiclip--format-html))))
+                 `[(:cf ,multiclip--format-text :data ,text)
+                   (:cf ,multiclip--format-html)]))
     (error
      ;; fall back to original function
      (funcall multiclip--original-interprogram-cut-function text)))
@@ -275,6 +309,9 @@ are fully fontified."
 
 (defun multiclip-paste-from-clipboard ()
   "Paste from system clipboard."
+  (when multiclip--last-paste-is-blob
+    (multiclip--request-save-blob multiclip--format-bitmap)
+    (setq multiclip--last-paste-is-blob nil))
   (funcall multiclip--get-data-from-clipboard-function))
 
 ;; ------------------------------------------------------------
@@ -287,8 +324,7 @@ are fully fontified."
 
 (defun multiclip--set-data-to-clipboard-w32 (data)
   "DATA is a list of (format . text)."
-  (jsonrpc-notify multiclip--conn
-                  'copy `[,(multiclip--normalize-data data)]))
+  (jsonrpc-notify multiclip--conn 'copy `[,data]))
 
 (defun multiclip--get-data-from-clipboard-w32 ()
   "Get data from clipboard, need to check internal state before set."
