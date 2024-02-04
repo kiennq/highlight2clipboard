@@ -213,8 +213,9 @@ This is used for both jsonrpc `notify' and `request'."
              (resp (jsonrpc-request multiclip--conn
                                     'get-to-file
                                     `[( :cf ,cf
-                                        :store_path ,(expand-file-name multiclip-assets-subpath
-                                                                       (file-name-directory buffer-file-name)))]
+                                        :path ,(expand-file-name multiclip-assets-subpath
+                                                                 (file-name-directory buffer-file-name))
+                                        :prefix ,(concat (file-name-nondirectory buffer-file-name) "_"))]
                                     :timeout 2
                                     :cancel-on-input t
                                     :cancel-on-input-retval nil)))
@@ -223,7 +224,7 @@ This is used for both jsonrpc `notify' and `request'."
            ((derived-mode-p '(org-mode))
             (format "[[%s]]" (string-join `("." ,multiclip-assets-subpath ,resp) "/")))
            (t
-            (format "![%s](%s)" resp
+            (format "![%s](%s)" (substring resp 0 8)
                     (string-join `("." ,multiclip-assets-subpath ,resp) "/")))))))
 
 ;;;###autoload
