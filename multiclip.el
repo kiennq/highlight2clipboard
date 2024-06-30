@@ -297,6 +297,7 @@ are fully fontified."
 
 (defun multiclip-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
+  (setq multiclip--last-paste-is-blob nil)
   (condition-case-unless-debug nil
       (when multiclip--set-data-to-clipboard-function
         (funcall multiclip--set-data-to-clipboard-function
