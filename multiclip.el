@@ -297,24 +297,26 @@ are fully fontified."
 
 (defun multiclip-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
-  (setq multiclip--last-paste-is-blob nil)
-  (condition-case-unless-debug nil
-      (when multiclip--set-data-to-clipboard-function
-        (funcall multiclip--set-data-to-clipboard-function
-                 `[(:cf ,multiclip--format-text :data ,text)
-                   (:cf ,multiclip--format-html)]))
-    (error
-     ;; fall back to original function
-     (funcall multiclip--original-interprogram-cut-function text)))
-  ;; Set the external clipboard string(s).
-  (setq multiclip--external-copy text))
+  (ignore-errors
+    (setq multiclip--last-paste-is-blob nil)
+    (condition-case-unless-debug nil
+        (when multiclip--set-data-to-clipboard-function
+          (funcall multiclip--set-data-to-clipboard-function
+                   `[(:cf ,multiclip--format-text :data ,text)
+                     (:cf ,multiclip--format-html)]))
+      (error
+       ;; fall back to original function
+       (funcall multiclip--original-interprogram-cut-function text)))
+    ;; Set the external clipboard string(s).
+    (setq multiclip--external-copy text)))
 
 (defun multiclip-paste-from-clipboard ()
   "Paste from system clipboard."
-  (when multiclip--last-paste-is-blob
-    (multiclip--request-save-blob multiclip--format-bitmap)
-    (setq multiclip--last-paste-is-blob nil))
-  (funcall multiclip--get-data-from-clipboard-function))
+  (ignore-errors
+    (when multiclip--last-paste-is-blob
+      (multiclip--request-save-blob multiclip--format-bitmap)
+      (setq multiclip--last-paste-is-blob nil))
+    (funcall multiclip--get-data-from-clipboard-function)))
 
 ;; ------------------------------------------------------------
 ;; System-specific support.
