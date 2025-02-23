@@ -98,6 +98,8 @@ The subpath is from the current folder."
   (or (and (executable-find "wslpath") 'gnu/wsl) system-type)
   "Extended `system-type' that recognize wsl.")
 
+(defvar multiclip--under-kill-new nil)
+
 ;; ------------------------------------------------------------
 ;; Global minor mode
 ;;
@@ -155,14 +157,20 @@ The subpath is from the current folder."
                            :error-fn
                            (lambda (err)
                              (message "Got error: %s" err))
-                           :deferred t)))
+                           :deferred t))
+
+  (define-advice kill-new (:around (orig-fun &rest args) notify)
+    "Add flag to know if is called under `kill-new'."
+    (let ((multiclip--under-kill-new t))
+      (apply orig-fun args))))
 
 (defun multiclip--exit ()
   "Kill clipboard connection and clean up."
   (interactive)
   (setq interprogram-cut-function multiclip--original-interprogram-cut-function)
   (setq interprogram-paste-function multiclip--original-interprogram-paste-function)
-  (if multiclip--conn (jsonrpc-shutdown multiclip--conn)))
+  (if multiclip--conn (jsonrpc-shutdown multiclip--conn))
+  (advice-remove 'kill-new 'kill-new@notify))
 
 ;; ------------------------------------------------------------
 ;; Core functions.
@@ -187,9 +195,9 @@ This is used for both jsonrpc `notify' and `request'."
 
 (defun multiclip--handle-paste (payload)
   "Paste PAYLOAD into `Emacs' clipboard."
+  (setq multiclip--last-paste-is-blob nil)
   (cond
    ((equal (plist-get payload :cf) multiclip--format-text)
-    (setq multiclip--last-paste-is-blob nil)
     (let* ((text (plist-get payload :data))
            (txt (replace-regexp-in-string "\r" "" text))
            interprogram-cut-function)
@@ -209,22 +217,23 @@ This is used for both jsonrpc `notify' and `request'."
 
 (defun multiclip--request-save-blob (cf)
   "Render format CF to file and save it to subpath of `multiclip-assets-subpath'."
-  (when-let ((_ buffer-file-name)
-             (resp (jsonrpc-request multiclip--conn
-                                    'get-to-file
-                                    `[( :cf ,cf
-                                        :path ,(expand-file-name multiclip-assets-subpath
-                                                                 (file-name-directory buffer-file-name))
-                                        :prefix ,(concat (file-name-nondirectory buffer-file-name) "_"))]
-                                    :timeout 2
-                                    :cancel-on-input t
-                                    :cancel-on-input-retval nil)))
+  (when-let* ((_ buffer-file-name)
+              (prefix (concat (file-name-nondirectory buffer-file-name) "_"))
+              (resp (jsonrpc-request multiclip--conn
+                                     'get-to-file
+                                     `[( :cf ,cf
+                                         :path ,(expand-file-name multiclip-assets-subpath
+                                                                  (file-name-directory buffer-file-name))
+                                         :prefix ,prefix)]
+                                     :timeout 2
+                                     :cancel-on-input t
+                                     :cancel-on-input-retval nil)))
     (setq multiclip--external-copy
           (cond
            ((derived-mode-p '(org-mode))
             (format "[[%s]]" (string-join `("." ,multiclip-assets-subpath ,resp) "/")))
            (t
-            (format "![%s](%s)" (substring resp 0 8)
+            (format "![%s](%s)" (substring resp (length prefix) (+ (length prefix) 8))
                     (string-join `("." ,multiclip-assets-subpath ,resp) "/")))))))
 
 ;;;###autoload
@@ -297,26 +306,27 @@ are fully fontified."
 
 (defun multiclip-copy-to-clipboard (text)
   "Copy TEXT with formatting to the system clipboard."
-  (ignore-errors
-    (setq multiclip--last-paste-is-blob nil)
-    (condition-case-unless-debug nil
-        (when multiclip--set-data-to-clipboard-function
-          (funcall multiclip--set-data-to-clipboard-function
-                   `[(:cf ,multiclip--format-text :data ,text)
-                     (:cf ,multiclip--format-html)]))
-      (error
-       ;; fall back to original function
-       (funcall multiclip--original-interprogram-cut-function text)))
-    ;; Set the external clipboard string(s).
-    (setq multiclip--external-copy text)))
+  (setq multiclip--last-paste-is-blob nil)
+  (condition-case-unless-debug nil
+      (when multiclip--set-data-to-clipboard-function
+        (funcall multiclip--set-data-to-clipboard-function
+                 `[(:cf ,multiclip--format-text :data ,text)
+                   (:cf ,multiclip--format-html)]))
+    (error
+     ;; fall back to original function
+     (funcall multiclip--original-interprogram-cut-function text)))
+  ;; Set the external clipboard string(s).
+  (setq multiclip--external-copy text))
 
 (defun multiclip-paste-from-clipboard ()
   "Paste from system clipboard."
-  (ignore-errors
-    (when multiclip--last-paste-is-blob
-      (multiclip--request-save-blob multiclip--format-bitmap)
-      (setq multiclip--last-paste-is-blob nil))
-    (funcall multiclip--get-data-from-clipboard-function)))
+  (unwind-protect
+      (progn
+        (when (and multiclip--last-paste-is-blob
+                   (not multiclip--under-kill-new))
+          (multiclip--request-save-blob multiclip--format-bitmap))
+        (funcall multiclip--get-data-from-clipboard-function))
+    (setq multiclip--last-paste-is-blob nil)))
 
 ;; ------------------------------------------------------------
 ;; System-specific support.
