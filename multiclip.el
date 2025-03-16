@@ -146,6 +146,7 @@ The subpath is from the current folder."
                                      :coding '(utf-8-unix . no-conversion)
                                      :noquery t
                                      :nowait t)
+                           :name "clipboard"
                            :events-buffer-config `(:size ,multiclip-log-size)
                            :request-dispatcher #'multiclip--handle-request
                            :notification-dispatcher #'multiclip--handle-request))
@@ -217,14 +218,15 @@ This is used for both jsonrpc `notify' and `request'."
 
 (defun multiclip--request-save-blob (cf)
   "Render format CF to file and save it to subpath of `multiclip-assets-subpath'."
-  (when-let* ((_ buffer-file-name)
-              (prefix (concat (file-name-nondirectory buffer-file-name) "_"))
+  (when-let* ((path (or buffer-file-name (expand-file-name default-directory)))
+              (prefix (concat (file-name-nondirectory path) "_"))
               (resp (jsonrpc-request multiclip--conn
                                      'get-to-file
                                      `[( :cf ,cf
                                          :path ,(expand-file-name multiclip-assets-subpath
-                                                                  (file-name-directory buffer-file-name))
-                                         :prefix ,prefix)]
+                                                                  (file-name-directory path))
+                                         :prefix ,prefix
+                                         :mime "image/jpeg")]
                                      :timeout 2
                                      :cancel-on-input t
                                      :cancel-on-input-retval nil)))
@@ -354,19 +356,15 @@ Will redownload if FORCED."
   (interactive "P")
   (unless (and (not forced)
                (executable-find multiclip-bin))
-    (let* ((url "https://github.com/kiennq/csclip/releases/latest/download/csclip.tar.zst")
+    (let* ((bin-file "csclip.tar.xz")
+           (url (format "https://github.com/kiennq/csclip/releases/latest/download/%s" bin-file))
            (exec-path (append exec-path `(,(expand-file-name
                                             (concat exec-directory "../../../../bin")))))
-           (default-directory (file-name-directory multiclip-bin))
-           (bin-file "csclip.tar.zst"))
+           (default-directory (file-name-directory multiclip-bin)))
       (unless (file-directory-p default-directory)
         (make-directory default-directory 'parents))
       (url-copy-file url bin-file 'ok-if-already-exists)
-      (require 'tar-mode)
-      (with-temp-buffer
-        (insert-file-contents bin-file)
-        (tar-mode)
-        (tar-untar-buffer)))))
+      (call-process "tar" nil nil nil "xf" bin-file))))
 
 (provide 'multiclip)
 
